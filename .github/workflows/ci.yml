@@ -64,5 +64,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: |
-          echo "placeholder-term-for-ci" > "$RUNNER_TEMP/deny.txt"
+          # A random term, so the check cannot match this workflow's own text.
+          echo "ci-placeholder-$(date +%s%N)" > "$RUNNER_TEMP/deny.txt"
           PROTON2M365_DENYLIST="$RUNNER_TEMP/deny.txt" scripts/check-publish.sh

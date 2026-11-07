@@ -17,7 +17,7 @@ from proton2m365 import pipeline
 from proton2m365.state import open_state
 from proton2m365.status import Outcome
 
-from .conftest import ExportBuilder, eml_bytes
+from .conftest import ExportBuilder, eml_bytes, owner_only
 from .test_imap_store import FakeClient, FakeClock, FakeServer
 
 R, S = 1, 2
@@ -877,7 +877,7 @@ def test_receipt_accounts_for_every_export_file(cli_world, capsys):
     out = capsys.readouterr().out
     path, doc = _receipt(cli_world)
     assert path.read_text().startswith('{"proton2m365_receipt": 1')
-    assert (path.stat().st_mode & 0o777) == 0o600
+    assert owner_only(path)
     outcomes = {e["id"]: e["outcome"] for e in doc["entries"]}
     assert outcomes["stray.eml"] == "orphan-eml"
     assert sorted(o for o in outcomes.values() if o.startswith("skipped:")) == ["skipped:draft"]
@@ -931,20 +931,15 @@ def test_unsaved_receipt_keeps_the_outcome_code_except_passed(cli_world, tmp_pat
     run = cli_world["run"]
     run("upload")
     run("tag")
-    locked = tmp_path / "locked"
-    locked.mkdir()
-    locked.chmod(0o500)
-    try:
-        assert run("verify", "--all", "--receipt", str(locked / "r.json")) == 14   # would have PASSED
-        err = capsys.readouterr().err
-        assert "could not write" in err and "r.json" in err
-        with open_state(cli_world["state_path"]) as st:
-            gid = next(r.graph_id for r in st.rows_to_verify() if r.proton_id == "a1")
-        cli_world["linked"].override[gid] = {"isRead": False}
-        assert run("verify", "--all", "--receipt", str(locked / "r.json")) == 12   # FAILED stays FAILED
-        assert not list(locked.iterdir())                                          # no temp files left
-    finally:
-        locked.chmod(0o700)
+    nowhere = tmp_path / "no such folder"                 # cannot be written on any system
+    assert run("verify", "--all", "--receipt", str(nowhere / "r.json")) == 14      # would have PASSED
+    err = capsys.readouterr().err
+    assert "could not write" in err and "r.json" in err
+    with open_state(cli_world["state_path"]) as st:
+        gid = next(r.graph_id for r in st.rows_to_verify() if r.proton_id == "a1")
+    cli_world["linked"].override[gid] = {"isRead": False}
+    assert run("verify", "--all", "--receipt", str(nowhere / "r.json")) == 12      # FAILED stays FAILED
+    assert not nowhere.exists()                                                     # no temp files left
 
 
 def test_check_publish_recognises_a_receipt(cli_world):
@@ -1088,7 +1083,7 @@ def test_verify_all_reports_a_message_uploaded_twice(cli_world, capsys):
 
 def test_receipt_page_is_private_escaped_and_lists_what_is_unresolved(cli_world, capsys):
     run, export = cli_world["run"], cli_world["export"]
-    (export.dir / "<script>.eml").write_bytes(b"x")                      # an orphan with a hostile name
+    (export.dir / "a&b.eml").write_bytes(b"x")                           # an orphan ('<' is not a legal name on Windows)
     run("upload")
     run("tag")
     capsys.readouterr()
@@ -1097,8 +1092,8 @@ def test_receipt_page_is_private_escaped_and_lists_what_is_unresolved(cli_world,
     page = cli_world["state_path"].with_name("state.receipt.html")
     assert f"Receipt page: {page.resolve()}" in out
     html = page.read_text()
-    assert (page.stat().st_mode & 0o777) == 0o600
-    assert "<strong>INCOMPLETE</strong>" in html and "&lt;script&gt;.eml" in html and "<script>" not in html
+    assert owner_only(page)
+    assert "<strong>INCOMPLETE</strong>" in html and "a&amp;b.eml" in html and "a&b.eml" not in html
     assert "Archive</td><td class=n>2</td>" in html and "Content: not compared" in html
     _, doc = _receipt(cli_world)
     assert doc["run_id"] in html

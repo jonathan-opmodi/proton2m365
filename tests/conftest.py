@@ -23,6 +23,14 @@ class ExportBuilder(_SampleBuilder):
         super().__init__(root, labels=labels, wrapped=wrapped, system_labels=SYSTEM_LABELS)
 
 
+def owner_only(path) -> bool:
+    """Readable and writable by the owner only. Windows ignores these mode bits (files there get the user
+    profile's permissions, as SECURITY.md says), so the check only applies elsewhere."""
+    import os
+
+    return os.name == "nt" or (Path(path).stat().st_mode & 0o777) == 0o600
+
+
 @pytest.fixture(autouse=True)
 def _isolated(tmp_path, monkeypatch):
     """No test may touch a real state file, config or token cache: run each in its own folder."""

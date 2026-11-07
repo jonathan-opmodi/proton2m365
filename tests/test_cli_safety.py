@@ -89,7 +89,7 @@ def test_state_path_from_environment_and_config(tmp_path, capsys, monkeypatch, e
     from proton2m365 import auth
 
     auth.DEFAULT_CONFIG.parent.mkdir(parents=True, exist_ok=True)
-    auth.DEFAULT_CONFIG.write_text(f'state = "{tmp_path / "cfg.sqlite"}"\n')
+    auth.DEFAULT_CONFIG.write_text(f"state = '{tmp_path / 'cfg.sqlite'}'\n")  # single quotes: Windows paths
     assert main(capsys, "plan", str(export.dir))[0] == 0
     assert (tmp_path / "cfg.sqlite").exists()
 

@@ -12,7 +12,7 @@ from proton2m365 import auth as auth_mod
 from proton2m365 import cli, doctor, pipeline
 from proton2m365.state import open_state
 
-from .conftest import ExportBuilder
+from .conftest import ExportBuilder, owner_only
 
 AT = "@"
 ADDRESS = "dana.private" + AT + "example.com"
@@ -75,7 +75,7 @@ def test_hashes_are_stable_per_install_and_differ_between_installs(tmp_path):
     a = doctor.Redactor(doctor.install_salt(tmp_path / "a"))
     assert a(ADDRESS) == doctor.Redactor(doctor.install_salt(tmp_path / "a"))(ADDRESS)
     assert a(ADDRESS) != doctor.Redactor(doctor.install_salt(tmp_path / "b"))(ADDRESS)
-    assert ((tmp_path / "a" / "doctor-salt").stat().st_mode & 0o777) == 0o600
+    assert owner_only(tmp_path / "a" / "doctor-salt")
 
 
 def test_doctor_never_signs_in_interactively(seeded, capsys, monkeypatch):
@@ -135,7 +135,7 @@ def test_crash_is_logged_privately_and_doctor_shows_only_package_frames(seeded, 
     err = capsys.readouterr().err
     assert "unexpected error ValueError" in err and "doctor --issue" in err
     log = next(seeded.parent.glob("crash-*.log"))
-    assert (log.stat().st_mode & 0o777) == 0o600
+    assert owner_only(log)
     report = doctor.render(doctor.build_report(
         state=None, state_path=seeded, auth=None, auth_error=None, online_checks=None,
         redact=doctor.Redactor(b"s"), crash_dirs=doctor.crash_dirs(seeded, auth_mod.CONFIG_DIR), version="t"))

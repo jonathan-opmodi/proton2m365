@@ -7,6 +7,8 @@ from proton2m365.auth import (
     CONSUMER_TENANT, GRAPH_SCOPES, IMAP_SCOPES, AppConfig, Auth, AuthError, resolve_app_config,
 )
 
+from .conftest import owner_only
+
 WORK = {"username": "alice@example.com", "home_account_id": "oid-a.tid-work"}
 OTHER = {"username": "bob@example.com", "home_account_id": "oid-b.tid-work"}
 PERSONAL = {"username": "carol@example.org", "home_account_id": f"oid-c.{CONSUMER_TENANT}"}
@@ -232,4 +234,4 @@ def test_token_cache_falls_back_to_an_owner_only_file(tmp_path, monkeypatch):
     monkeypatch.setattr(msal_extensions, "build_encrypted_persistence", no_keyring)
     cache = auth_mod._token_cache(tmp_path / "cfg" / "token_cache.bin")
     assert cache is not None
-    assert ((tmp_path / "cfg" / "token_cache.bin").stat().st_mode & 0o777) == 0o600
+    assert owner_only(tmp_path / "cfg" / "token_cache.bin")

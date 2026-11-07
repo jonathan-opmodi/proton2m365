@@ -127,7 +127,7 @@ def test_uv_lock_must_use_pypi(repo):
 def test_stage_copies_exactly_the_allowlisted_files(repo, tmp_path):
     out = tmp_path / "public"
     assert tree(repo, "--stage", str(out))[0] == 0
-    copied = sorted(str(p.relative_to(out)) for p in out.rglob("*") if p.is_file())
+    copied = sorted(p.relative_to(out).as_posix() for p in out.rglob("*") if p.is_file())
     assert copied == ["scripts/publish-files.txt", "src/app.py", "tests/fixtures/SYNTHETIC.txt"]
 
 

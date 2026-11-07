@@ -13,11 +13,13 @@ def hold_in_child(path):
     child = subprocess.Popen([sys.executable, "-c", textwrap.dedent(f"""
         import time
         from proton2m365.locks import FileLock
+        import os
         with FileLock({str(path)!r}):
-            print("locked", flush=True)
+            print(os.getpid(), flush=True)
             time.sleep(30)
     """)], stdout=subprocess.PIPE, text=True)
-    assert child.stdout.readline().strip() == "locked"
+    # The PID the child reports: on Windows a venv's python.exe launches the real interpreter as another process.
+    child.reported_pid = child.stdout.readline().strip()
     return child
 
 
@@ -27,7 +29,7 @@ def test_a_second_process_is_refused_and_told_the_holder(tmp_path):
     try:
         with pytest.raises(LockHeld) as exc:
             FileLock(path).acquire()
-        assert exc.value.holder == str(child.pid)
+        assert exc.value.holder == child.reported_pid
     finally:
         child.kill()
         child.wait()

@@ -8,6 +8,8 @@ import pytest
 
 from proton2m365.state import PlanRow, StateError, StateLocked, open_state
 
+from .conftest import owner_only
+
 
 def row(pid="p1", *, folder=("Inbox",), cats=(), seen=True, flagged=False, skip=None, sha="a" * 64, path=None):
     return PlanRow(
@@ -135,20 +137,20 @@ def test_second_writer_is_refused(tmp_path):
     path = tmp_path / "state.sqlite"
     holder = subprocess.Popen(
         [sys.executable, "-c", textwrap.dedent(f"""
-            import sys, time
+            import os, sys, time
             from proton2m365.state import open_state
             with open_state({str(path)!r}, create=True):
-                print("locked", flush=True)
+                print(os.getpid(), flush=True)
                 time.sleep(30)
         """)],
         stdout=subprocess.PIPE, text=True,
     )
     try:
-        assert holder.stdout.readline().strip() == "locked"
+        reported = holder.stdout.readline().strip()   # the real interpreter's PID (a launcher on Windows)
         with pytest.raises(StateLocked) as exc:
             with open_state(path):
                 pass
-        assert exc.value.holder == str(holder.pid)
+        assert exc.value.holder == reported
     finally:
         holder.kill()
         holder.wait()
@@ -263,7 +265,7 @@ def test_v1_state_upgrades_with_backup(tmp_path):
         assert s.conn.execute("SELECT check_result FROM messages WHERE proton_id = 'a'").fetchone()[0] == "pass"
         assert s.failed_check_ids() == set()
     backup = tmp_path / "state.sqlite.bak-v1"
-    assert backup.exists() and (backup.stat().st_mode & 0o777) == 0o600
+    assert backup.exists() and owner_only(backup)
     import sqlite3
     b = sqlite3.connect(backup)
     assert b.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()[0] == "1"

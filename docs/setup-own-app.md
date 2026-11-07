@@ -58,7 +58,8 @@ client_id = "<application id>"
 tenant = "<tenant id or domain, or consumers>"
 ```
 
-or pass `--client-id` and `--tenant` to each command, or set `PROTON2M365_CLIENT_ID` and `PROTON2M365_TENANT`.
+(on Windows, write paths in single quotes, `state = 'C:\Users\you\state.sqlite'`, because backslashes inside double
+quotes are escape sequences in TOML), or pass `--client-id` and `--tenant` to each command, or set `PROTON2M365_CLIENT_ID` and `PROTON2M365_TENANT`.
 Flags win over the environment, which wins over the file. Then check everything with:
 
 ```sh
