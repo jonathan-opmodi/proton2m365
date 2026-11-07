@@ -5,16 +5,25 @@ headers, long lines re-encoded) and Exchange rewrites headers and transfer encod
 match. What must match is what a person reads and keeps:
 
     attachments   the decoded bytes of every attachment (SHA-256), as a multiset with their file names
+                  (decoded and unfolded); a winmail.dat (Outlook's TNEF) counts as the files inside it,
+                  because Exchange unpacks it on arrival
     text          every text/plain part, decoded, NFC, LF line endings, trailing whitespace removed
-    html-text     the visible text of every text/html part, plus every link target; reported as its own
-                  check and never presumed harmless
+    html-text     the visible text of every text/html part, plus every link target (entity- and
+                  percent-decoded); reported as its own check and never presumed harmless
+
+Text declared as ISO-8859-1 or ASCII is read as Windows-1252, as browsers and Exchange do (mail that says
+latin-1 but contains curly quotes is common).
 """
 
 from __future__ import annotations
 
 import hashlib
+import html
 import re
+import struct
 import unicodedata
+from email.header import decode_header, make_header
+from urllib.parse import unquote
 from collections import Counter
 from dataclasses import dataclass, field
 from email import message_from_bytes, policy
@@ -44,7 +53,7 @@ class _HtmlText(HTMLParser):
         if tag == "a":
             href = dict(attrs).get("href")
             if href:
-                self.links.append(href.strip())
+                self.links.append(unquote(html.unescape(href.strip())))
 
     def handle_endtag(self, tag):
         if tag in self.SKIP and self._skip:
@@ -60,13 +69,71 @@ def _norm_text(text: str) -> str:
     return "\n".join(line.rstrip() for line in text.split("\n")).strip("\n")
 
 
+# C1 control characters (U+0080-U+009F) in decoded text are almost always Windows-1252 punctuation that went
+# through a Latin-1 step (U+0092 for a curly apostrophe). Browsers and Exchange show them as the Windows-1252
+# character, so the comparison does too.
+def _c1_table() -> dict[int, str]:
+    table = {}
+    for code in range(0x80, 0xA0):
+        try:
+            table[code] = bytes([code]).decode("cp1252")
+        except UnicodeDecodeError:
+            pass
+    return table
+
+
+C1_AS_CP1252 = _c1_table()
+LATIN1_ALIASES = {"iso-8859-1", "iso8859-1", "latin-1", "latin1", "l1", "us-ascii", "ascii", "iso_8859-1"}
+TNEF_SIGNATURE = 0x223E9F78
+
+
 def _part_text(part) -> str:
     payload = part.get_payload(decode=True) or b""
-    charset = part.get_content_charset() or "utf-8"
+    charset = (part.get_content_charset() or "utf-8").lower()
+    if charset in LATIN1_ALIASES:
+        charset = "cp1252"  # what browsers and Exchange actually use for these labels
     try:
-        return payload.decode(charset, errors="replace")
+        text = payload.decode(charset, errors="replace")
     except LookupError:
-        return payload.decode("utf-8", errors="replace")
+        text = payload.decode("utf-8", errors="replace")
+    return text.translate(C1_AS_CP1252)
+
+
+def _filename(raw_name: str | None) -> str:
+    """A file name as a person sees it: encoded words decoded, folded lines joined, spaces collapsed."""
+    if not raw_name:
+        return ""
+    try:
+        name = str(make_header(decode_header(raw_name)))
+    except Exception:  # noqa: BLE001 - a malformed encoded word: compare it as written
+        name = raw_name
+    return re.sub(r"\s+", " ", unicodedata.normalize("NFC", name)).strip()
+
+
+def tnef_attachments(data: bytes) -> list[tuple[str, bytes]] | None:
+    """The files inside a winmail.dat (TNEF), or None when it is not readable TNEF."""
+    if len(data) < 6 or struct.unpack_from("<I", data, 0)[0] != TNEF_SIGNATURE:
+        return None
+    pos, files, current = 6, [], None
+    try:
+        while pos + 9 <= len(data):
+            level = data[pos]
+            attr, length = struct.unpack_from("<II", data, pos + 1)
+            value = data[pos + 9:pos + 9 + length]
+            pos += 9 + length + 2  # value plus its 2-byte checksum
+            if level != 2:
+                continue
+            kind = attr & 0xFFFF
+            if kind == 0x9002:            # attAttachRendData: a new attachment starts
+                current = {"name": "", "data": None}
+                files.append(current)
+            elif current is not None and kind == 0x8010:   # attAttachTitle
+                current["name"] = value.rstrip(b"\0").decode("cp1252", errors="replace")
+            elif current is not None and kind == 0x800F:   # attAttachData
+                current["data"] = value
+    except struct.error:
+        return None
+    return [(f["name"], f["data"]) for f in files if f["data"] is not None]
 
 
 def read(raw: bytes) -> Content:
@@ -81,7 +148,13 @@ def read(raw: bytes) -> Content:
         ctype = part.get_content_type()
         if disposition == "attachment" or (filename and ctype not in ("text/plain", "text/html")):
             data = part.get_payload(decode=True) or b""
-            c.attachments[(filename or "", hashlib.sha256(data).hexdigest())] += 1
+            inner = tnef_attachments(data) if _filename(filename).lower() == "winmail.dat" or \
+                ctype == "application/ms-tnef" else None
+            if inner is not None:
+                for name, blob in inner:
+                    c.attachments[(_filename(name), hashlib.sha256(blob).hexdigest())] += 1
+                continue
+            c.attachments[(_filename(filename), hashlib.sha256(data).hexdigest())] += 1
         elif ctype == "text/plain":
             texts.append(_norm_text(_part_text(part)))
         elif ctype == "text/html":
