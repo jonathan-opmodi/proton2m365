@@ -1,0 +1,22 @@
+Versions:
+  proton2m365 <VERSION>
+  Python <X.Y.Z>
+  <OS>
+Settings (where each came from):
+  account: default
+  state: default
+Account:
+  not run: P2M-AUTH-NO-APP (see docs/errors.md) (doctor never opens a browser; run any online command once to sign in)
+Mailbox:
+  not run: not signed in
+State:
+  state file: <path HASH>, schema 2
+  planned: 34
+  skipped: 6
+  skipped draft: 2
+  skipped spam: 2
+  skipped trash: 2
+  plan settings: {"exclude_labels": [], "export_dir": "<path HASH>", "export_format": "export-tool-v1", "include_spam": false, "include_trash": false, "long_line_limit": 10000, "max_size": 36700160, "sample": true, "starred_as_flag": false}
+  bound to account: no
+Last crash:
+  none

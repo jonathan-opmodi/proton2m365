@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.12", "3.13"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - run: uv sync
+      - run: uv run pytest -q
+
+  try-it:
+    # The README's "Try it" route, from the built wheel, on every OS (catches import failures such as
+    # POSIX-only modules on Windows, and non-ASCII output on a Windows console).
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - run: uv build --wheel -o dist
+      - name: Install the wheel in a clean environment
+        shell: bash
+        run: |
+          uv venv "$RUNNER_TEMP/try"
+          uv pip install --python "$RUNNER_TEMP/try" dist/*.whl
+          echo "VENV=$RUNNER_TEMP/try" >> "$GITHUB_ENV"
+      - name: Try it
+        shell: bash
+        env:
+          PYTHONIOENCODING: utf-8
+        run: |
+          BIN="$VENV/bin"; [ -d "$BIN" ] || BIN="$VENV/Scripts"
+          "$BIN/proton2m365" --help
+          "$BIN/proton2m365" sample-export sample
+          "$BIN/proton2m365" scan sample
+          "$BIN/proton2m365" plan --dry-run sample | tee plan.txt
+          grep -q "Projects/Alpha" plan.txt
+
+  publish-check:
+    # No private data in the repository: the generic email-domain check (the private deny-list runs locally,
+    # in scripts/check-publish.sh and the pre-push hook).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          echo "placeholder-term-for-ci" > "$RUNNER_TEMP/deny.txt"
+          PROTON2M365_DENYLIST="$RUNNER_TEMP/deny.txt" scripts/check-publish.sh

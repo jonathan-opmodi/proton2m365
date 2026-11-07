@@ -1,0 +1,2 @@
+# .eml files under tests/ that are synthetic (written for the tests, never taken from a real mailbox).
+# scripts/check-publish.sh refuses any other .eml under tests/.

@@ -1,0 +1,14 @@
+__pycache__/
+.gstack/
+.pytest_cache/
+.venv/
+*.egg-info/
+*.log
+# migration data: never commit (scripts/publish-files.txt has the same never-list)
+*.sqlite*
+*.bak-v*
+*.receipt.*
+verify-report*.csv
+token_cache*
+upload-probe.log
+upload-trial.log

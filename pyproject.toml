@@ -1,0 +1,59 @@
+[project]
+name = "proton2m365"
+dynamic = ["version"]
+description = "Move a Proton Mail Export Tool backup into Microsoft 365 or Outlook.com, with a receipt for every message."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.12"
+keywords = ["proton", "proton mail", "microsoft 365", "outlook", "email migration", "imap", "eml"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Intended Audience :: System Administrators",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Communications :: Email",
+    "Topic :: Utilities",
+]
+dependencies = [
+    "httpx>=0.28.1",
+    "imapclient>=4.1.0",
+    "msal>=1.39.0",
+    "msal-extensions>=1.3.1",
+]
+
+[project.urls]
+Homepage = "https://github.com/jonathan-opmodi/proton2m365"
+Documentation = "https://github.com/jonathan-opmodi/proton2m365#readme"
+Issues = "https://github.com/jonathan-opmodi/proton2m365/issues"
+Changelog = "https://github.com/jonathan-opmodi/proton2m365/blob/main/CHANGELOG.md"
+
+[project.scripts]
+proton2m365 = "proton2m365.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
+# Builds without git metadata (an sdist, a shallow checkout) still get a version.
+fallback-version = "0.0.0+unknown"
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "tests", "README.md", "LICENSE", "CHANGELOG.md", "SECURITY.md", "pyproject.toml"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/proton2m365"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

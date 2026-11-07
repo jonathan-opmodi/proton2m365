@@ -1,0 +1,5 @@
+#!/bin/sh
+# Git pre-push hook: scan every commit, tag and file about to be pushed.
+# Install in the public repo:  ln -s ../../scripts/pre-push .git/hooks/pre-push
+remote="$1"
+exec python3 "$(git rev-parse --show-toplevel)/scripts/check_publish.py" --pre-push "$remote"

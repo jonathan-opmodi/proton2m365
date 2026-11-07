@@ -1,0 +1,59 @@
+name: Publish
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write    # attach the wheel to the GitHub release
+  id-token: write    # PyPI trusted publishing
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # hatch-vcs needs the tag and history
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - run: uv build -o dist
+      - name: Version must match the tag
+        run: |
+          want="${GITHUB_REF_NAME#v}"
+          ls dist | grep -q "proton2m365-${want}-py3-none-any.whl" || { echo "built $(ls dist), tag $want"; exit 1; }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - name: TestPyPI (release candidates)
+        if: contains(github.ref_name, 'rc')
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+      - name: PyPI
+        if: ${{ !contains(github.ref_name, 'rc') }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+      - name: Homebrew formula (copy into the tap repository; release builds only)
+        if: ${{ !contains(github.ref_name, 'rc') }}
+        run: |
+          python3 scripts/make-homebrew-formula.py --version "${GITHUB_REF_NAME#v}" \
+            --sha256 "$(sha256sum dist/*.tar.gz | cut -d' ' -f1)" > dist/proton2m365.rb
+      - name: GitHub release with the wheel (testers install this, with dependencies from PyPI only)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" \
+            --notes "See CHANGELOG.md" $( [[ "$GITHUB_REF_NAME" == *rc* ]] && echo --prerelease )

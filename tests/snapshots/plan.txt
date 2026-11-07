@@ -1,0 +1,25 @@
+Plan for: sample/user@example.com/mail_20261101_120000
+State: state.sqlite
+
+Upload 34 of 40 messages (16.8 KB), received 2020-01-02 to 2020-02-04.
+Left out: 2 draft, 2 trash, 2 spam
+Settings: include trash no, include spam no, max size 35.0 MB, starred -> category "Starred"
+
+Folders (4), largest first:
+    Archive                                             10
+    Inbox                                               10
+    Projects/Alpha                                       8
+    Sent Items                                           6
+
+Labels (2), largest first; kept ones become categories:
+    Work                                                 6
+    Starred                                              2
+
+Notes:
+  1 have over-long lines; text parts will be re-encoded
+  e.g. sample-06-inbox
+  1 have no Message-ID; one will be added
+  e.g. sample-05-inbox
+
+State: 40 new, 0 updated, 0 unchanged
+Next: proton2m365 upload

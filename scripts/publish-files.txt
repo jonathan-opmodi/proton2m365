@@ -1,0 +1,26 @@
+# Files that may be published, as git pathspecs relative to the repo root.
+# scripts/check-publish.sh scans exactly these (minus the never-list below) before any push.
+src/
+tests/
+docs/
+README.md
+LICENSE
+CHANGELOG.md
+SECURITY.md
+CONTRIBUTING.md
+pyproject.toml
+uv.lock
+.github/
+.gitignore
+scripts/
+
+# Never published, even when a pattern above matches (fnmatch on the path).
+!docs/designs/*
+!CLAUDE.md
+!.gstack/*
+!*.sqlite*
+!*.bak-v*
+!*.receipt.*
+!*.log
+!verify-report*.csv
+!token_cache*

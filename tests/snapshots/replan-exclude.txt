@@ -1,0 +1,27 @@
+Plan for: sample/user@example.com/mail_20261101_120000
+State: state.sqlite
+
+Upload 28 of 40 messages (15.9 KB), received 2020-01-05 to 2020-02-04.
+Left out: 6 excluded-label, 2 draft, 2 trash, 2 spam
+  Excluding a label leaves out whole messages, including ones that also carry other labels.
+Settings: include trash no, include spam no, max size 35.0 MB, starred -> category "Starred"
+
+Folders (4), largest first:
+    Archive                                             10
+    Inbox                                                7
+    Projects/Alpha                                       7
+    Sent Items                                           4
+
+Labels (2), largest first; kept ones become categories:
+    Work                                                 6  excluded
+    Starred                                              2
+
+Notes:
+  1 have over-long lines; text parts will be re-encoded
+  e.g. sample-06-inbox
+  1 have no Message-ID; one will be added
+  e.g. sample-05-inbox
+
+State: 0 new, 6 updated, 34 unchanged
+  Re-classified: 6 planned -> skipped
+Next: proton2m365 upload

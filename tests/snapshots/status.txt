@@ -1,0 +1,5 @@
+State: <TMP>/state.sqlite (40 messages)
+  planned               34
+  skipped                6
+  skipped: 2 draft, 2 spam, 2 trash
+Next: proton2m365 upload
