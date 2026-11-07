@@ -187,3 +187,13 @@ def test_this_repository_publishes_clean(monkeypatch, tmp_path):
     monkeypatch.setenv("PROTON2M365_DENYLIST", str(deny))
     code, err = tree(ROOT)
     assert code == 0, err
+
+
+def test_annotated_tags_need_a_noreply_tagger(repo):
+    base = git(repo, "rev-parse", "HEAD").strip()
+    git(repo, "tag", "-a", "v1", "-m", "release")                       # tagged with the noreply identity
+    tag = git(repo, "rev-parse", "v1").strip()
+    assert tree(repo, "--range", f"{base}..{tag}")[0] == 0
+    git(repo, "tag", "-a", "v2", "-m", "release", email=PRIVATE_ADDR)
+    code, err = tree(repo, "--range", f"{base}..{git(repo, 'rev-parse', 'v2').strip()}")
+    assert code == 1 and "tagger email is not a GitHub noreply address" in err

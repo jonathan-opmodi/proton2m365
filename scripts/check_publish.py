@@ -42,7 +42,7 @@ SQLITE_HEADER = b"SQLite format 3\x00"
 SYNTHETIC_MANIFEST = "tests/fixtures/SYNTHETIC.txt"
 DEFAULT_DENYLIST = Path.home() / ".config" / "proton2m365" / "publish-denylist.txt"
 ALLOWED_DOMAINS = ("example.com", "example.org", "example.net")
-ALLOWED_SUFFIXES = (".invalid", ".example", ".test", ".localhost")
+ALLOWED_SUFFIXES = (".invalid", ".example", ".test", ".localhost", "users.noreply.github.com")
 ALLOWED_ADDRESSES = ("noreply@anthropic.com", "noreply@github.com")
 NOREPLY_AUTHOR = re.compile(r"^(\d+\+)?[A-Za-z0-9-]+@users\.noreply\.github\.com$")
 PYPI_HOSTS = ("pypi.org", "files.pythonhosted.org")
@@ -207,7 +207,12 @@ def check_history(repo: Path, deny, tip: str, bases: list[str]) -> Report:
     manifest = git(repo, "show", f"{tip}:{SYNTHETIC_MANIFEST}", check=False)
     synthetic = synthetic_list(manifest)
     if git(repo, "cat-file", "-t", tip).strip() == "tag":
-        scan_text(f"tag {tip[:12]}", "", git(repo, "cat-file", "-p", tip, binary=True), deny, report)
+        body = git(repo, "cat-file", "-p", tip, binary=True)
+        tagger = next((line for line in body.split(b"\n") if line.startswith(b"tagger ")), b"")
+        email = tagger.split(b"<", 1)[1].split(b">", 1)[0].decode(errors="replace") if b"<" in tagger else ""
+        if tagger and not NOREPLY_AUTHOR.match(email):
+            report.add(f"tag {tip[:12]}", "tagger email is not a GitHub noreply address")
+        scan_text(f"tag {tip[:12]}", "", body, deny, report)
     for commit in git(repo, "rev-list", tip, *exclude).split():
         meta = git(repo, "show", "-s", "--format=%ae%n%ce", commit).split("\n")
         for role, addr in zip(("author", "committer"), meta[:2]):
