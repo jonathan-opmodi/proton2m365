@@ -83,9 +83,10 @@ def resolve_app_config(client_id: str | None, tenant: str | None, *, config: dic
                ("config.toml", config.get("client_id")))
     source, cid = next(((s, v) for s, v in sources if v), (None, ""))
     if not cid:
-        raise AuthError("P2M-AUTH-NO-APP: proton2m365 needs your own sign-in app (a one-time setup, about 10 "
-                        "minutes: docs/setup-own-app.md). Then pass --client-id and --tenant, or put client_id and "
-                        f"tenant in {DEFAULT_CONFIG}")
+        raise AuthError("P2M-AUTH-NO-APP: proton2m365 needs your own sign-in app. If you administer a Microsoft 365 "
+                        "work or school tenant, run `proton2m365 setup` (one sign-in, about a minute). Otherwise "
+                        "register it by hand (docs/setup-own-app.md) and pass --client-id and --tenant, or put "
+                        f"client_id and tenant in {DEFAULT_CONFIG}")
     tenant = tenant or os.environ.get(ENV_TENANT) or config.get("tenant") or DEFAULT_TENANT
     return AppConfig(cid, tenant, source)
 

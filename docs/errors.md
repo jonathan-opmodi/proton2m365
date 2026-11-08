@@ -67,6 +67,38 @@ A personal mailbox would go over 14 GB (free Outlook.com mailboxes hold 15 GB). 
 ## P2M-SAMPLE
 The state was planned from `sample-export`. Upload it only into a test mailbox, with `--sample-ok`.
 
+## P2M-SETUP-BLOCKED
+Your organization does not let Microsoft Graph Command Line Tools sign in, so `setup` could not register the app.
+It wrote an Azure CLI script (`proton2m365-setup.sh`, or `.ps1` on Windows) in the current folder that creates the
+same app: run it as an administrator, then run the `proton2m365 setup --use-app ...` command it prints. Or register
+the app by hand: [setup-own-app.md](setup-own-app.md).
+
+## P2M-SETUP-CONFIG
+`setup` could not write `~/.config/proton2m365/config.toml` (the message names the path and the reason) and printed
+the lines to put in it yourself; or `setup --use-app` was given something that is not a client ID, or no `--tenant`.
+
+## P2M-SETUP-IMAP
+The tenant has no Office 365 Exchange Online service (needed for IMAP) and `setup` could not add it, or the tenant's
+Microsoft Graph or Exchange service does not offer a permission proton2m365 needs. Check the tenant has Exchange
+Online mailboxes.
+
+## P2M-SETUP-LOCKED
+Another `proton2m365 setup` is running on this computer. Wait for it to finish, then run `setup` again.
+
+## P2M-SETUP-PERSONAL
+You signed in to `setup` with a personal Microsoft account (Outlook.com, Microsoft 365 Personal or Family). Only an
+organization's administrator can register an app with `setup`. For a personal account, register the app by hand:
+[setup-own-app.md](setup-own-app.md), route B.
+
+## P2M-SETUP-PROPAGATION
+The app was created, but Microsoft had not made it visible yet when `setup` stopped waiting. Run `setup` again in a
+few minutes: it finds the same app and continues (it never creates a second one).
+
+## P2M-SETUP-ROLE
+Your account may not register apps or grant consent in this tenant. Run `setup` as a Global Administrator, Privileged
+Role Administrator, Application Administrator or Cloud Application Administrator, or have one run the Azure CLI
+script `setup` wrote.
+
 ## P2M-STATE-MISSING
 No state file at that path. Check `--state` (the message lists state files nearby), or run `plan` first: only
 `plan` creates a state file.

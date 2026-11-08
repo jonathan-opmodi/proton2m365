@@ -824,6 +824,79 @@ def cmd_dedupe(args: argparse.Namespace, *, ask: Callable[[str], str] = input) -
     return _run_online(args, body)
 
 
+def cmd_setup(args: argparse.Namespace) -> int:
+    """Register proton2m365's sign-in app in the admin's tenant (see setup.py), or record one made another way."""
+    from . import setup as setup_mod
+
+    config_path = auth_mod.DEFAULT_CONFIG
+    try:
+        if args.use_app:
+            if not args.tenant or args.tenant in ("common", "organizations"):
+                raise setup_mod.SetupError("P2M-SETUP-CONFIG: --use-app needs --tenant with your tenant ID or domain "
+                                           "(the Azure CLI script prints the full command)")
+            setup_mod.use_app(config_path, args.use_app, args.tenant)
+            print(f"Recorded the app in {config_path}.")
+            _result(client_id=args.use_app, tenant=args.tenant, recorded=True)
+            print("Next: proton2m365 selftest  (live checks with synthetic messages, then you are ready to migrate)")
+            return st.EXIT_OK
+        lock = setup_mod.lock_for(config_path)
+        try:
+            lock.acquire()
+        except LockHeld as exc:
+            raise setup_mod.locked_error(exc) from None
+        try:
+            signin = setup_mod.AdminSignIn(args.tenant or setup_mod.DEFAULT_TENANT, device_code=args.device_code,
+                                           script_dir=Path.cwd())
+            claims = signin.sign_in()
+            tenant = claims.get("tid") or args.tenant
+            print(f"Signed in to tenant {tenant}.")
+            run = setup_mod.Setup(setup_mod.admin_graph(signin), config_path, script_dir=Path.cwd(),
+                                  tenant_hint=tenant)
+            if args.remove:
+                removed = run.remove(tenant, claims.get("oid"))
+                if not removed:
+                    print("Nothing to remove: setup has not registered an app recorded in "
+                          f"{config_path}.")
+                else:
+                    print("Removed: " + ", ".join(removed) + f". {config_path} no longer names it.")
+                _result(removed=removed)
+                return st.EXIT_OK
+            result = run.run(tenant, claims.get("oid"), dry_run=args.dry_run)
+        finally:
+            lock.release()
+    except LockHeld as exc:  # pragma: no cover - handled above
+        raise setup_mod.locked_error(exc) from None
+    except (setup_mod.SetupError, graph_store.GraphError) as exc:
+        print(f"setup: {exc}", file=sys.stderr)
+        _json_error(args, exc)
+        return st.EXIT_USAGE
+    if result.foreign_apps:
+        print(f"Note: {result.foreign_apps} other app(s) named {setup_mod.APP_NAME!r} in this tenant were not made "
+              "by setup; they were left alone.")
+    if result.dry_run:
+        print("setup --dry-run would:")
+        for line in result.plan:
+            print(f"  - {line}")
+        print("Nothing was created.")
+    else:
+        what = ("Updated the app setup registered earlier" if result.adopted else "Registered the app")
+        print(f"{what}: {setup_mod.APP_NAME} (client ID {result.client_id}), with "
+              + ", ".join(setup_mod.GRAPH_PERMISSIONS + setup_mod.EXCHANGE_PERMISSIONS)
+              + ", and granted admin consent for this tenant.")
+        print(f"Wrote client_id and tenant to {config_path}.")
+    cli_note = {"revoked": "Microsoft Graph Command Line Tools' consent from this sign-in was removed again.",
+                "kept": "Microsoft Graph Command Line Tools already had other consent in this tenant (for example "
+                        "from Graph PowerShell); it was left as it was."}.get(result.cli_grant)
+    if cli_note:
+        print(cli_note)
+    _result(client_id=result.client_id, tenant=result.tenant, adopted=result.adopted, created=result.created,
+            cli_grant=result.cli_grant, dry_run=result.dry_run, plan=result.plan)
+    if not result.dry_run:
+        print("Ready. Next: proton2m365 selftest  (live checks with synthetic messages; Microsoft can take a few "
+              "minutes to apply new consent, so if it reports a consent error, wait and run it again)")
+    return st.EXIT_OK
+
+
 _LAST_RESULT: list[dict] = []   # what a command reports with --json (the last one wins)
 _JSON_OUT: list = []            # the real stdout while prose is redirected to stderr
 
@@ -1284,6 +1357,17 @@ def build_parser() -> argparse.ArgumentParser:
     dd.add_argument("--break-lease", action="store_true",
                     help="take over the mailbox lease another computer left behind (only if none is running)")
     dd.set_defaults(func=cmd_dedupe)
+
+    su = sub.add_parser("setup", parents=[as_json],
+                        help="register proton2m365's sign-in app in your Microsoft 365 tenant (administrators; one sign-in)")
+    su.add_argument("--tenant", help="your tenant ID or domain (default: the tenant of the account you sign in with)")
+    su.add_argument("--device-code", action="store_true", help="sign in with a device code instead of a browser")
+    su.add_argument("--dry-run", action="store_true", help="sign in and show what setup would create; create nothing")
+    su.add_argument("--remove", action="store_true", help="delete the app setup registered and forget it")
+    su.add_argument("--use-app", metavar="CLIENT_ID",
+                    help="record an app registered another way (the Azure CLI script setup writes, or by hand); "
+                         "needs --tenant")
+    su.set_defaults(func=cmd_setup)
 
     stat = sub.add_parser("status", parents=[stateful, as_json], help="counts per stage, failures, rate and ETA (offline)")
     stat.set_defaults(func=cmd_status)

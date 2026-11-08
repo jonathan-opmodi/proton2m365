@@ -26,7 +26,8 @@ have passed. Support is best effort through GitHub issues.
 - **Your own sign-in app** for migrating (not needed to try it). proton2m365 does not ship one, so your mail is only
   ever reached through an app you control. Registering it is a one-time setup, see
   [docs/setup-own-app.md](docs/setup-own-app.md):
-  - work or school account: an administrator of your organization registers it, about 10 minutes;
+  - work or school account: if you are an administrator, `proton2m365 setup` registers it in one sign-in (about a
+    minute); otherwise an administrator registers it by hand, about 10 minutes;
   - personal account (Outlook.com, Microsoft 365 Family): Microsoft lets only organizations register apps, so
     you first create a free Azure account (it asks for a card to verify you; the app itself costs nothing),
     about 20 minutes.
@@ -48,8 +49,9 @@ still writes nothing anywhere.
 
 ## Migrate your export
 
-First register your sign-in app and put its client ID and tenant in `~/.config/proton2m365/config.toml`
-([docs/setup-own-app.md](docs/setup-own-app.md)). Then:
+First register your sign-in app: as a tenant administrator, run `proton2m365 setup`; otherwise follow
+[docs/setup-own-app.md](docs/setup-own-app.md) and put its client ID and tenant in
+`~/.config/proton2m365/config.toml`. Then:
 
 ```sh
 proton2m365 selftest                       # live checks with synthetic messages; cleans up after itself

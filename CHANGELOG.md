@@ -2,6 +2,15 @@
 
 All notable changes to proton2m365. Versions follow the git tags (`vX.Y.Z`).
 
+## Unreleased (v0.3.0)
+
+- `proton2m365 setup` registers the sign-in app in a work or school tenant in one administrator sign-in (through
+  Microsoft Graph Command Line Tools, kept in memory only), grants admin consent and writes config.toml. Running it
+  again updates the same app; `--remove` deletes it; `--dry-run` shows what it would do. When the tenant blocks that
+  sign-in, it writes an Azure CLI script instead, finished with `setup --use-app`.
+- Sign-in no longer crashes when the macOS Keychain refuses writes (no keychain, or a locked one over SSH): it uses
+  the owner-only cache file instead.
+
 ## v0.2.0 (2026-11-07)
 
 - A newer export of the same mailbox can be planned into the same state: `migrate NEWER-EXPORT` uploads only
