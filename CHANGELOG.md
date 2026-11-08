@@ -2,6 +2,14 @@
 
 All notable changes to proton2m365. Versions follow the git tags (`vX.Y.Z`).
 
+## v0.4.0 (unreleased)
+
+- `proton2m365 contacts-csv` converts Proton's contacts export (`.vcf`, vCard 2.1, 3.0 or 4.0) into the CSV
+  that Outlook imports, offline. Values with no Outlook column (a 4th email, photos, custom fields, a birthday
+  without a year, ...) are listed in an owner-only `.losses.txt` beside the CSV; the terminal shows only counts.
+- docs/calendar-and-contacts.md: moving calendars with Outlook's own `.ics` upload, and what it drops without
+  saying so (events repeating on listed dates or hourly, extra reminders; meetings become read-only).
+
 ## v0.3.0 (2026-11-07)
 
 - `proton2m365 setup` registers the sign-in app in a work or school tenant in one administrator sign-in (through

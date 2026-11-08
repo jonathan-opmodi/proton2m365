@@ -110,6 +110,14 @@ command again.
 ## P2M-STATE-NEWER
 The state file was written by a newer proton2m365. Upgrade (`pipx upgrade proton2m365`).
 
+## P2M-CONTACTS-EXISTS
+`contacts-csv` would replace a CSV or loss report from an earlier run. If you have not imported that CSV into
+Outlook yet, run again with `--force`. If you have, keep it: importing contacts twice creates duplicates.
+
+## P2M-CONTACTS-WRITE
+`contacts-csv` could not write the CSV or the loss report (the folder is read-only, or the disk is full). Choose
+another place with `-o`.
+
 ## P2M-CONFIRM-NEEDED
 The command would change something you have to agree to first, and could not ask (no terminal, or `--json`).
 The message says what and how many. For `plan`: messages planned from an earlier export are missing from this
@@ -121,6 +129,11 @@ in the mailbox and are listed in the receipt); if the export is incomplete, expo
 The export this state was planned from is missing or different. Put it back where it was, or `plan` again with
 its new location. A newer export of the same mailbox is accepted by `plan` (and `migrate <new export>`): it
 must share messages with the state; an export sharing none is a different mailbox and needs its own `--state`.
+
+## P2M-VCARD
+`contacts-csv` could not read the file as contacts: it cannot be opened, has no `BEGIN:VCARD`, ends in the
+middle of a contact, or has a line that is not a vCard property. Export the contacts from Proton again and
+pass the `.vcf` file.
 
 ## P2M-EXPORT-FORMAT
 The export does not look like the Proton Export Tool format proton2m365 knows. Please open an issue with
