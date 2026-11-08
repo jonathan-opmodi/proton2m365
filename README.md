@@ -66,6 +66,10 @@ Or all of it in one command, which asks before uploading and can be run again to
 proton2m365 migrate /path/to/export        # add --exclude-label "Name" to leave mail out
 ```
 
+Long commands (`upload`, `tag`, `verify --all`, `prune`, `dedupe`, `migrate`) keep the computer from falling
+asleep while they run (closing a laptop lid still sleeps it) and show a desktop notification when they end;
+`--allow-sleep` and `--no-notify` turn these off.
+
 Every command ends with a `Next:` line naming the command to run next. `verify` writes three receipt files next
 to the state file: `state.receipt.html` (open it in a browser, or print it), `state.receipt.txt` and the full
 per-message `state.receipt.json`. Keep your Proton export until you have read the receipt.
@@ -92,7 +96,7 @@ Want it somewhere else? `plan --map-folder "Projects=Clients"` moves a folder (a
 `~/.config/proton2m365/config.toml` under `[map.folders]` and `[map.labels]`.
 
 Each uploaded message carries an added `X-Proton-Id` header, which is how proton2m365 finds it again. While
-`upload` or `prune` runs, a folder `_proton2m365_lease` holds one small message so that a second computer does
+`upload`, `prune` or `dedupe` runs, a folder `_proton2m365_lease` holds one small message so that a second computer does
 not upload the same mail; it is emptied when the run ends.
 
 ## What is not preserved
@@ -102,6 +106,28 @@ mailbox's size limit (35 MB by default) are skipped and listed. `verify` checks 
 categories, drafts and folders; `verify --content` also downloads the checked messages and compares their text,
 attachments, HTML text and links with the export (`verify --all --content` downloads the whole mailbox). The
 receipt says which of these were done.
+
+## A newer export later
+
+Exported again from Proton after migrating (new mail arrived, or you exported before you were done)? Run
+`migrate` with the new export and the same state file:
+
+```sh
+proton2m365 migrate /path/to/newer-export  # same --state as before
+```
+
+Only messages that are new since the first export are uploaded; labels you changed in Proton are applied by
+`tag`. If some messages planned from the first export are missing from the newer one (deleted in Proton, or
+an export that stopped early), `plan` stops and says how many: if that is expected, run it again with
+`--accept-missing`. Those messages stay in the mailbox, are checked by presence only, and are listed in the
+receipt. An export that shares no message with the state is a different mailbox and needs its own `--state`.
+
+## Extra copies
+
+If `verify --all` reports messages with more than one copy in the mailbox (for example after another tool
+was used too), `proton2m365 dedupe --dry-run` lists them and `proton2m365 dedupe` moves the extra copies to
+Deleted Items, keeping one of each. It asks first (`--yes` skips the question; without a terminal it is
+required) and `--folder "Archive"` limits it to one folder. Then run `tag` and `verify` again.
 
 ## If it stops
 

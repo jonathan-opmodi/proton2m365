@@ -2,6 +2,21 @@
 
 All notable changes to proton2m365. Versions follow the git tags (`vX.Y.Z`).
 
+## Unreleased (v0.2.0)
+
+- A newer export of the same mailbox can be planned into the same state: `migrate NEWER-EXPORT` uploads only
+  new messages. Messages the newer export no longer has need `plan --accept-missing`; they stay in the mailbox,
+  are checked by presence only and are listed in the receipt. An export sharing no message is refused.
+- `dedupe` moves extra copies of uploaded messages to Deleted Items, keeping one (`--dry-run`, `--yes`,
+  `--folder`); the kept copies are tagged and checked again.
+- Long commands keep the computer awake and notify when they end (`--allow-sleep`, `--no-notify`,
+  `PROTON2M365_ALLOW_SLEEP`, `PROTON2M365_NO_NOTIFY`).
+- `upload` refuses an export file that changed after `plan` read it.
+- Safer under failure: a Graph create is never repeated blindly after an uncertain error; a run that slept
+  past its mailbox lease while another computer took over stops (`P2M-LEASE-LOST`); an interrupted state
+  backup is made again.
+- The state file moves to schema 3 (a backup is kept); v0.1 refuses it. See docs/upgrading.md.
+
 ## v0.1.0 (2026-11-07)
 
 First public release. Microsoft 365 work and school accounts are supported; Outlook.com and Microsoft 365

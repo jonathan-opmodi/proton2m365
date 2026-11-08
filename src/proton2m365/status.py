@@ -174,7 +174,7 @@ def migration_status(
         why = []
         if checks.duplicated:
             why.append(f"{len(checks.duplicated):,} messages have more than one copy in the mailbox: "
-                       + _names(checks.duplicated) + " (delete the extra copies in Outlook)")
+                       + _names(checks.duplicated) + " (run `dedupe` to move the extra copies to Deleted Items)")
         if failed:
             why.append(f"{failed:,} checked messages do not match")
         if checks.folders_short:

@@ -663,7 +663,7 @@ def cli_world(export, tmp_path, monkeypatch):
         return cli.main([*argv, "--state", str(state_path)])
 
     return {"run": run, "linked": linked, "export": export, "state_path": state_path, "cli": cli,
-            "signed_in": signed_in}
+            "signed_in": signed_in, "server": server}
 
 
 def _next_line(out: str) -> str:
@@ -1046,7 +1046,8 @@ def test_interrupt_after_append_before_state_update_never_sends_twice(world, mon
     assert st.stage_counts()["appended"] == 6
 
 
-@pytest.mark.parametrize("command", [("upload",), ("tag",), ("prune",), ("status",), ("doctor",)])
+@pytest.mark.parametrize("command", [("upload",), ("tag",), ("prune",), ("status",), ("doctor",),
+                                     ("dedupe", "--dry-run")])
 def test_every_command_prints_one_json_object(cli_world, capsys, command):
     run = cli_world["run"]
     run("upload")
@@ -1054,7 +1055,7 @@ def test_every_command_prints_one_json_object(cli_world, capsys, command):
     code = run(*command, "--json")
     out = capsys.readouterr().out
     doc = json.loads(out)                                   # exactly one JSON object on stdout
-    assert doc["command"] == command[0] and doc["exit_code"] == code
+    assert doc["command"] == command[0] and doc["exit_code"] == code and doc["json_version"] == 1
     if command[0] in ("upload", "tag", "prune"):
         assert "next" in doc
 
@@ -1346,3 +1347,123 @@ def test_receipt_marks_messages_missing_from_the_newer_export(world, tmp_path):
                  if e["id"] == "a1")
     assert entry["outcome"] == "missing-from-newer-export-never-uploaded"
     assert entry["source"] == "missing-from-newer-export"
+
+
+# --- dedupe (v0.2.0) ----------------------------------------------------------------------------------------
+
+def _duplicate(server, folder, pid):
+    """Put a second copy of an uploaded message into its folder (as an earlier tool or a re-run might)."""
+    uid, msg, flags, when = next(m for m in server.folders[folder] if im.parse_proton_id(m[1]) == pid)
+    return server.store(folder, msg, flags, when)
+
+
+def test_dedupe_moves_extra_copies_and_the_message_passes_again(world):
+    st, server = world["state"], world["server"]
+    _migrate(world)
+    extra = _duplicate(server, "Archive", "a1")
+    report = pipeline.find_duplicates(st, world["imap"])
+    assert [(d.proton_id, d.extra) for d in report.found] == [("a1", [extra])]
+    pipeline.dedupe_run(st, world["imap"], report, say=quiet)
+    assert server.copies("Archive", "a1") == 1 and server.copies("Deleted Items", "a1") == 1
+    assert report.moved == [("Archive", extra)]
+    assert st.stage_counts()["appended"] == 1          # tagged again by the next tag run
+    pipeline.tag_run(st, world["graph"], say=quiet)
+    r = pipeline.verify_run(st, world["graph"], check_all=True, imap=world["imap"],
+                            export=pipeline.export_accounting(st, world["export"].dir))
+    assert r.status.outcome == Outcome.PASSED, (r.mismatches, r.status)
+
+
+def test_dedupe_keeps_the_copy_state_recorded_even_when_it_is_not_the_lowest_uid(world):
+    st, server = world["state"], world["server"]
+    _migrate(world)
+    first = st.recorded_uid("a1")
+    second = _duplicate(server, "Archive", "a1")
+    st.conn.execute("UPDATE messages SET imap_uid = ? WHERE proton_id = 'a1'", (second,))
+    st.conn.commit()
+    report = pipeline.find_duplicates(st, world["imap"])
+    assert [(d.keep, d.extra) for d in report.found] == [(second, [first])]
+    pipeline.dedupe_run(st, world["imap"], report, say=quiet)
+    assert [m[0] for m in server.folders["Archive"] if im.parse_proton_id(m[1]) == "a1"] == [second]
+    assert st.recorded_uid("a1") == second
+
+
+def test_dedupe_interrupted_after_the_move_is_repaired_on_the_next_run(world):
+    st, server, imap = world["state"], world["server"], world["imap"]
+    _migrate(world)
+    _duplicate(server, "Archive", "a1")
+    report = pipeline.find_duplicates(st, imap)
+    st.record_meta(pipeline.DEDUPE_PENDING, json.dumps(["a1"]))       # what dedupe_run writes first
+    d = report.found[0]
+    imap.move_uids(d.folder, d.extra, validity=d.validity)          # then the run stops
+    assert st.stage_counts()["tagged"] == 6
+    again = pipeline.find_duplicates(st, imap)
+    assert again.found == []
+    pipeline.dedupe_run(st, imap, again, say=quiet)
+    assert again.repaired == ["a1"] and st.stage_counts()["appended"] == 1
+    assert json.loads(st.get_meta(pipeline.DEDUPE_PENDING)) == []
+
+
+def test_dedupe_moves_nothing_when_the_folder_was_renumbered(world):
+    st, server, imap = world["state"], world["server"], world["imap"]
+    _migrate(world)
+    _duplicate(server, "Archive", "a1")
+    report = pipeline.find_duplicates(st, imap)
+    server.uidvalidity = 2
+    with pytest.raises(im.ImapError, match="P2M-IMAP-UIDVALIDITY"):
+        pipeline.dedupe_run(st, imap, report, say=quiet)
+    assert server.copies("Archive", "a1") == 2
+
+
+def test_cli_dedupe_without_a_terminal_asks_for_yes_and_moves_nothing(cli_world, capsys, monkeypatch):
+    run, server = cli_world["run"], cli_world["server"]
+    assert run("upload") == 0 and run("tag") == 0
+    _duplicate(server, "Archive", "a1")
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    assert run("dedupe") == 2
+    assert "P2M-CONFIRM-NEEDED" in capsys.readouterr().err
+    assert server.copies("Archive", "a1") == 2
+    assert run("dedupe", "--dry-run") == 0
+    assert "Nothing moved (--dry-run)" in capsys.readouterr().out and server.copies("Archive", "a1") == 2
+    assert run("dedupe", "--yes") == 0
+    out = capsys.readouterr().out
+    assert "Moved 1 extra copies" in out and "proton2m365 tag" in _next_line(out)
+    assert server.copies("Archive", "a1") == 1
+
+
+def test_json_usage_error_is_one_json_object(cli_world, capsys):
+    code = cli_world["cli"].main(["upload", "--json", "--no-such-option"])
+    out, err = capsys.readouterr()
+    assert code == 2 and "usage:" in err
+    doc = json.loads(out)
+    assert doc["error"]["code"] == "P2M-USAGE" and doc["error"]["context"]["command"] == "upload"
+
+
+def test_migrate_json_without_yes_refuses_with_one_json_object(cli_world, capsys, passing_selftest):
+    code = cli_world["run"]("migrate", str(cli_world["export"].dir), "--json")
+    out, _ = capsys.readouterr()
+    assert code == 2
+    assert json.loads(out)["error"]["code"] == "P2M-CONFIRM-NEEDED"
+
+
+def test_migrate_json_yes_ends_with_one_json_object(cli_world, capsys, passing_selftest):
+    code = cli_world["run"]("migrate", str(cli_world["export"].dir), "--json", "--yes")
+    out, _ = capsys.readouterr()
+    doc = json.loads(out)
+    assert doc["command"] == "migrate" and doc["exit_code"] == code == 0
+
+
+def test_migrate_with_a_newer_export_tops_up(cli_world, capsys, passing_selftest, tmp_path):
+    import shutil
+
+    run, export = cli_world["run"], cli_world["export"]
+    assert run("migrate", str(export.dir), "--yes") == 0
+    newer = tmp_path / "newer" / export.dir.name
+    shutil.copytree(export.dir, newer)
+    builder = ExportBuilder.__new__(ExportBuilder)
+    builder.dir = newer
+    builder.add("n1", labels=("0", "5"))
+    capsys.readouterr()
+    assert run("migrate", str(newer), "--yes") == 0
+    out = capsys.readouterr().out
+    assert "top-up of the same mailbox" in out and "Uploaded 1 " in out
+    assert cli_world["server"].copies("INBOX", "n1") == 1

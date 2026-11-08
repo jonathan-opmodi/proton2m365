@@ -287,6 +287,7 @@ class ImapStore:
         self._trash: str | None = None
         self._existing: dict[str, str] = {}             # casefolded name -> name
         self._present: dict[str, dict[str, int | None]] = {}  # folder -> {proton_id: uid}
+        self._validity: dict[str, int | None] = {}  # folder -> UIDVALIDITY seen at its last SELECT
         self._max_uid: dict[str, int] = {}
         self._dupes: dict[str, dict[str, set[int]]] = {}  # folder -> {proton_id: uids}, when more than one
         self._selected: str | None = None
@@ -406,6 +407,35 @@ class ImapStore:
         self._present.pop(self._trash, None)  # Deleted Items changed; read it fresh next time
         return set(wanted)
 
+    def uid_validity(self, path: tuple[str, ...]) -> int | None:
+        """The folder's UIDVALIDITY when it was last read (UIDs are only meaningful together with it)."""
+        return self._validity.get(self.imap_name(path))
+
+    def move_uids(self, path: tuple[str, ...], uids: Iterable[int], *, validity: int | None) -> list[int]:
+        """Move these exact messages (by UID) to Deleted Items; for dedupe, which keeps one copy of a Proton id.
+
+        The UIDs were read under `validity`; if the folder's UIDVALIDITY has changed since (the server renumbered
+        it), nothing is moved. Only UIDs still in the folder are moved; returns them."""
+        if self._trash is None:
+            raise ImapError("no Deleted Items folder (\\Trash) found over IMAP")
+        if b"MOVE" not in self.client.capabilities():
+            raise ImapError("P2M-IMAP-NO-MOVE: this server does not support IMAP MOVE, which removing messages needs; "
+                            "nothing was moved")
+        folder = self.imap_name(path)
+        self._select(folder)
+        if validity is not None and self._validity.get(folder) != validity:
+            raise ImapError(f"P2M-IMAP-UIDVALIDITY: the server renumbered {folder} since it was read, so nothing was "
+                            "moved; run the command again")
+        wanted = sorted(set(uids))
+        still = set(self.client.search(["UID", f"{wanted[0]}:*"])) if wanted else set()
+        moving = [u for u in wanted if u in still]
+        for start in range(0, len(moving), FETCH_CHUNK):
+            self.client.move(moving[start:start + FETCH_CHUNK], self._trash)
+        self._present.pop(folder, None)
+        self._dupes.pop(folder, None)
+        self._present.pop(self._trash, None)
+        return moving
+
     @property
     def trash_path(self) -> tuple[str, ...]:
         if self._trash is None:
@@ -435,6 +465,8 @@ class ImapStore:
     def _select(self, folder: str) -> dict:
         info = self.client.select_folder(folder)
         self._selected = folder
+        validity = info.get(b"UIDVALIDITY")
+        self._validity[folder] = int(validity) if validity is not None else None
         return info
 
     def _fetch_ids(self, folder: str, first_uid: int) -> None:

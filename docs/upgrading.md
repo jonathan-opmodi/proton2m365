@@ -7,6 +7,20 @@ proton2m365 upgrades an older state file the first time a writing command opens 
 
 An older proton2m365 refuses a state file written by a newer one (`P2M-STATE-NEWER`) and changes nothing.
 
+### Going back to an older version
+
+Prefer going forward: run the newer version again. If you must go back, the `.bak-v<old version>` copy is
+the state as it was before the upgrade, so anything done after it (uploads, tags, checks) is not in it. Copy
+it over the state file, install the older version, then run `plan` with your export and `verify --all`:
+mail already uploaded is found again by its `X-Proton-Id` header, so nothing is uploaded twice.
+
+### Versions
+
+| proton2m365 | state schema | what changed |
+|---|---|---|
+| 0.1.x | 2 | |
+| 0.2.0 | 3 | records which messages a newer export no longer has (`plan --accept-missing`) |
+
 ## Pinning a version
 
 ```sh

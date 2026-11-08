@@ -256,9 +256,11 @@ def cmd_scan(args: argparse.Namespace) -> int:
         )
     except pe.ExportError as exc:
         print(f"scan: {exc}", file=sys.stderr)
+        _json_error(args, exc)
         return st.EXIT_USAGE
     if args.json:
-        json.dump(inv.to_dict(), sys.stdout, indent=2)
+        json.dump({**inv.to_dict(), "command": "scan", "exit_code": st.EXIT_OK, "json_version": JSON_VERSION},
+                  sys.stdout, indent=2)
         sys.stdout.write("\n")
     else:
         sys.stdout.write(render_scan(inv))
@@ -529,7 +531,7 @@ class _Connections:
 
 
 ACCOUNT_META = "account"
-WRITING_COMMANDS = frozenset({"upload", "tag", "prune"})
+WRITING_COMMANDS = frozenset({"upload", "tag", "prune", "dedupe"})
 
 
 def _recorded_account(state) -> dict | None:
@@ -593,7 +595,7 @@ class _Refused(Exception):
     pass
 
 
-MAILBOX_LOCKED = frozenset({"upload", "prune"})  # commands that add or move mail over IMAP
+MAILBOX_LOCKED = frozenset({"upload", "prune", "dedupe"})  # commands that add or move mail over IMAP
 
 
 class _MailboxBusy(Exception):
@@ -670,6 +672,9 @@ def _run_online(args: argparse.Namespace, body) -> int:
             conns.close()
 
 
+JSON_VERSION = 1  # bumped only when a field changes meaning or goes away (added fields keep the version)
+
+
 def _json_error(args: argparse.Namespace, exc: Exception) -> None:
     """With --json, a failure is also one JSON object on stdout: {"error": {code, message, fix, retryable}}."""
     if not getattr(args, "json", False):
@@ -681,7 +686,8 @@ def _json_error(args: argparse.Namespace, exc: Exception) -> None:
     out = _JSON_OUT[-1] if _JSON_OUT else sys.stdout
     _ERRORED.append(True)
     json.dump({"error": {"code": code, "message": message, "fix": f"see docs/errors.md#{code.lower()}",
-                         "retryable": retryable, "context": {"command": args.command}}}, out)
+                         "retryable": retryable, "context": {"command": args.command}},
+               "exit_code": st.EXIT_USAGE, "json_version": JSON_VERSION}, out)
     out.write("\n")
 
 
@@ -769,6 +775,50 @@ def cmd_prune(args: argparse.Namespace) -> int:
         if r.not_found:
             print(f"  {len(r.not_found):,} were not in their folder any more (marked skipped):"
                   + _list_ids(r.not_found))
+        _print_next(state, args)
+        return st.EXIT_OK
+    return _run_online(args, body)
+
+
+def cmd_dedupe(args: argparse.Namespace, *, ask: Callable[[str], str] = input) -> int:
+    def body(state, conns):
+        imap = conns.imap_store(args)
+        report = pipeline.find_duplicates(state, imap, args.folder)
+        pending = json.loads(state.get_meta(pipeline.DEDUPE_PENDING) or "[]")
+        if report.other_ids:
+            print(f"{report.other_ids:,} duplicated messages were not uploaded by this state; left alone.")
+        if not report.found and not pending:
+            print("No extra copies found.")
+            _result(extra_copies=0, moved=0, by_folder={})
+            _print_next(state, args)
+            return st.EXIT_OK
+        if report.found:
+            print(f"{report.extra_copies:,} extra copies of {len(report.found):,} messages:")
+            for folder, n in sorted(report.by_folder().items(), key=lambda kv: kv[0].casefold()):
+                print(f"  {folder}: {n:,}")
+            print("  for example:" + _list_ids([d.proton_id for d in report.found]))
+        if args.dry_run:
+            _result(extra_copies=report.extra_copies, moved=0, by_folder=report.by_folder(), dry_run=True,
+                    ids=[d.proton_id for d in report.found])
+            print("Nothing moved (--dry-run).")
+            return st.EXIT_OK
+        if report.found and not args.yes:
+            if args.json or not sys.stdin.isatty():
+                raise _Refused(f"P2M-CONFIRM-NEEDED: dedupe would move {report.extra_copies:,} extra copies in "
+                               f"{len(report.by_folder()):,} folders to Deleted Items and cannot ask here; run it "
+                               "with --dry-run to list them, then with --yes")
+            answer = ask(f"Move {report.extra_copies:,} extra copies to Deleted Items (one copy of each message "
+                         "stays; Deleted Items may be emptied automatically by your retention policy)? "
+                         "Type yes to continue: ")
+            if answer.strip().lower() not in ("y", "yes"):
+                print("Nothing moved.")
+                return st.EXIT_OK
+        pipeline.dedupe_run(state, imap, report)
+        _result(extra_copies=report.extra_copies, moved=len(report.moved), by_folder=report.by_folder(),
+                repaired=report.repaired)
+        print(f"Moved {len(report.moved):,} extra copies to Deleted Items."
+              + (f" Reset {len(report.repaired):,} messages left by an interrupted dedupe." if report.repaired else ""))
+        print("The kept copies are tagged again by the next `tag`, then checked by `verify`.")
         _print_next(state, args)
         return st.EXIT_OK
     return _run_online(args, body)
@@ -1047,8 +1097,11 @@ def cmd_migrate(args: argparse.Namespace, *, wait: Callable[[float], None] = tim
         to_send = s.remaining_upload_bytes()
         selftest_done = s.get_meta("migrate_selftest") == "passed"
     if progress.planned and not args.yes:
-        if not sys.stdin.isatty() and ask is input:
-            print("migrate: confirm with --yes when there is no terminal to ask on", file=sys.stderr)
+        if (not sys.stdin.isatty() or getattr(args, "json", False)) and ask is input:
+            refusal = _Refused(f"P2M-CONFIRM-NEEDED: migrate would upload {progress.planned:,} messages and cannot "
+                               "ask here; confirm with --yes")
+            print(f"migrate: {refusal}", file=sys.stderr)
+            _json_error(args, refusal)
             return st.EXIT_USAGE
         answer = ask(f"\nUpload {progress.planned:,} messages ({_fmt_bytes(to_send)}) into the mailbox you sign in "
                      "to next? Type yes to continue: ")
@@ -1172,6 +1225,11 @@ def build_parser() -> argparse.ArgumentParser:
     online.add_argument("--account", metavar="ADDRESS", help="which signed-in account to use when there are several")
     online.add_argument("--progress", choices=("auto", "plain", "none"), default="auto",
                         help="status line while working: auto (in place on a terminal), plain lines, or none")
+    online.add_argument("--allow-sleep", action="store_true",
+                        help="let the computer sleep during long commands (by default idle sleep is held off; "
+                             "or set PROTON2M365_ALLOW_SLEEP=1)")
+    online.add_argument("--no-notify", action="store_true",
+                        help="no desktop notification when a long command ends (or set PROTON2M365_NO_NOTIFY=1)")
     online.add_argument("--bind-account", action="store_true",
                         help="record the signed-in account in a state file made before accounts were recorded")
     stateful = argparse.ArgumentParser(add_help=False)
@@ -1217,10 +1275,20 @@ def build_parser() -> argparse.ArgumentParser:
                           "the plain-text summary goes beside it as .receipt.txt)")
     ver.set_defaults(func=cmd_verify)
 
+    dd = sub.add_parser("dedupe", parents=[online, stateful, as_json],
+                        help="move extra copies of uploaded messages to Deleted Items (one copy stays)")
+    dd.add_argument("--dry-run", action="store_true", help="list the extra copies; move nothing")
+    dd.add_argument("--yes", action="store_true", help="do not ask before moving (needed without a terminal)")
+    dd.add_argument("--folder", action="append", default=[], metavar="PATH",
+                    help='only this folder, as planned (e.g. "Archive" or "Projects/Alpha"); repeatable')
+    dd.add_argument("--break-lease", action="store_true",
+                    help="take over the mailbox lease another computer left behind (only if none is running)")
+    dd.set_defaults(func=cmd_dedupe)
+
     stat = sub.add_parser("status", parents=[stateful, as_json], help="counts per stage, failures, rate and ETA (offline)")
     stat.set_defaults(func=cmd_status)
 
-    mig = sub.add_parser("migrate", parents=[online, stateful, rates],
+    mig = sub.add_parser("migrate", parents=[online, stateful, rates, as_json],
                          help="the whole migration in one resumable command (scan, plan, selftest, upload, tag, verify)")
     mig.add_argument("export_dir", help="the Proton export folder (or a folder containing exactly one)")
     mig.add_argument("--exclude-label", action="append", default=[], metavar="LABEL",
@@ -1302,10 +1370,45 @@ def _safe_console() -> None:
             stream.reconfigure(errors="backslashreplace")
 
 
+LONG_COMMANDS = frozenset({"upload", "tag", "prune", "dedupe", "migrate"})  # and verify --all
+_DEPTH: list[int] = []  # migrate runs other commands through main(); only the outermost holds sleep off
+
+
+def _is_long(args: argparse.Namespace) -> bool:
+    return args.command in LONG_COMMANDS or (args.command == "verify" and getattr(args, "all", False))
+
+
 def main(argv: list[str] | None = None) -> int:
     _safe_console()
-    args = build_parser().parse_args(argv)
+    words = list(sys.argv[1:] if argv is None else argv)
+    try:
+        args = build_parser().parse_args(argv)
+    except SystemExit as exc:
+        if exc.code not in (0, None) and "--json" in words:  # argparse already printed the usage to stderr
+            json.dump({"error": {"code": "P2M-USAGE", "message": "the command line was not understood (see stderr)",
+                                 "fix": "see docs/errors.md#p2m-usage", "retryable": False,
+                                 "context": {"command": next((w for w in words if not w.startswith("-")), None)}},
+                       "exit_code": st.EXIT_USAGE, "json_version": JSON_VERSION}, sys.stdout)
+            sys.stdout.write("\n")
+            return st.EXIT_USAGE
+        raise
     _resolve_settings(args)
+    if _DEPTH or not _is_long(args):
+        return _dispatch(args, argv)
+    from . import awake
+
+    _DEPTH.append(1)
+    try:
+        with awake.KeepAwake(enabled=not getattr(args, "allow_sleep", False)):
+            code = _dispatch(args, argv)
+    finally:
+        _DEPTH.pop()
+    meaning = dict(st.EXIT_CODES).get(code, f"exit {code}")
+    awake.notify(f"proton2m365 {args.command} finished", meaning, enabled=not getattr(args, "no_notify", False))
+    return code
+
+
+def _dispatch(args: argparse.Namespace, argv: list[str] | None) -> int:
     if getattr(args, "json", False) and args.command != "scan":
         return _run_json(args)
     try:
@@ -1337,7 +1440,7 @@ def _run_json(args: argparse.Namespace) -> int:
     finally:
         out = _JSON_OUT.pop()
     if _LAST_RESULT or not _ERRORED:  # an error already printed {"error": ...}; anything else prints a result
-        json.dump({"command": args.command, "exit_code": code, **_next_fields(),
+        json.dump({"command": args.command, "exit_code": code, "json_version": JSON_VERSION, **_next_fields(),
                    **(_LAST_RESULT[-1] if _LAST_RESULT else {})}, out, default=str)
         out.write("\n")
     return code

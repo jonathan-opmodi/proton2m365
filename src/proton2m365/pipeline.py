@@ -19,7 +19,7 @@ from .imap_store import (
 )
 from .sample_export import SAMPLE_MARKER
 from .state import (
-    PLANNED, TAG_FAILED, UPLOAD_FAILED, PlanRow, ReplanResult, State, WorkRow, open_state,
+    PLANNED, TAG_FAILED, UPLOAD_FAILED, PlanRow, ReplanResult, State, StateError, WorkRow, open_state,
 )
 from .status import CheckFacts, ExportAccounting, MigrationStatus, Outcome, Progress, migration_status
 from .targets import MailStore, Organizer
@@ -443,6 +443,85 @@ def prune_run(state: State, imap: MailStore, *, say: Callable[[str], None] = pri
             else:
                 report.not_found.append(pid)
     return report
+
+
+DEDUPE_PENDING = "dedupe_pending"  # meta: ids whose extra copies are being moved (repaired on the next run)
+
+
+@dataclass
+class DuplicateSet:
+    folder: tuple[str, ...]
+    proton_id: str
+    keep: int
+    extra: list[int]
+    validity: int | None
+
+
+@dataclass
+class DedupeReport:
+    found: list[DuplicateSet] = field(default_factory=list)
+    other_ids: int = 0          # duplicated ids this state does not know (left alone)
+    moved: list[tuple[str, int]] = field(default_factory=list)   # (folder, uid) moved to Deleted Items
+    repaired: list[str] = field(default_factory=list)            # ids reset after an interrupted run
+
+    @property
+    def extra_copies(self) -> int:
+        return sum(len(d.extra) for d in self.found)
+
+    def by_folder(self) -> dict[str, int]:
+        out: dict[str, int] = {}
+        for d in self.found:
+            name = "/".join(d.folder)
+            out[name] = out.get(name, 0) + len(d.extra)
+        return out
+
+
+def find_duplicates(state: State, imap: MailStore, folders: Iterable[str] = ()) -> DedupeReport:
+    """Messages of this state with more than one copy in their planned folder. The copy to keep is the one
+    state recorded at upload (its UID), else the lowest UID. Copies of ids the state does not know are left alone."""
+    report = DedupeReport()
+    wanted = {f.casefold() for f in folders}
+    known = state.all_ids()
+    for folder in sorted(state.in_mailbox_counts()):
+        if wanted and "/".join(folder).casefold() not in wanted:
+            continue
+        dupes = imap.duplicates(folder)
+        validity = imap.uid_validity(folder)
+        for pid, uids in sorted(dupes.items()):
+            if pid not in known:
+                report.other_ids += 1
+                continue
+            recorded = state.recorded_uid(pid)
+            keep = recorded if recorded in uids else min(uids)
+            report.found.append(DuplicateSet(folder, pid, keep, [u for u in uids if u != keep], validity))
+    return report
+
+
+def dedupe_run(state: State, imap: MailStore, report: DedupeReport, *, say: Callable[[str], None] = print) -> None:
+    """Move the extra copies found by find_duplicates, then send each message back to tag (see mark_deduped).
+
+    The ids are recorded before anything moves, so if the run stops after a MOVE but before the state update,
+    the next run (or dedupe with nothing left to move) still resets them."""
+    pending = sorted(set(json.loads(state.get_meta(DEDUPE_PENDING) or "[]")) | {d.proton_id for d in report.found})
+    state.record_meta(DEDUPE_PENDING, json.dumps(pending))
+    by_folder: dict[tuple[tuple[str, ...], int | None], list[DuplicateSet]] = {}
+    for d in report.found:
+        by_folder.setdefault((d.folder, d.validity), []).append(d)
+    for (folder, validity), sets in sorted(by_folder.items(), key=lambda kv: kv[0][0]):
+        uids = [u for d in sets for u in d.extra]
+        say(f"  {'/'.join(folder)}: moving {len(uids):,} extra copies to Deleted Items")
+        moved = imap.move_uids(folder, uids, validity=validity)
+        report.moved += [("/".join(folder), u) for u in moved]
+        for d in sets:
+            state.mark_deduped(d.proton_id, d.keep)
+    for pid in pending:
+        if pid not in {d.proton_id for d in report.found}:
+            try:
+                state.mark_deduped(pid, state.recorded_uid(pid))  # left over from an interrupted run
+                report.repaired.append(pid)
+            except StateError:
+                pass  # already reset, or no longer in the mailbox
+    state.record_meta(DEDUPE_PENDING, "[]")
 
 
 def label_colors(export_dir: Path | None) -> dict[str, str | None]:

@@ -226,6 +226,7 @@ class FakeServer:
         self.special = {"Sent Items": (b"\\HasNoChildren", b"\\Sent"), "Archive": (b"\\Archive",),
                         "Deleted Items": (b"\\Trash",)}
         self.move_capable = True
+        self.uidvalidity = 1
         self.next_uid = 100
         self.on_append: list[str] = []
         self.logins = 0
@@ -259,7 +260,8 @@ class FakeClient:
 
     def select_folder(self, name):
         self.selected = name
-        return {b"EXISTS": len(self.s.folders[name]), b"UIDNEXT": self.s.next_uid + 1}
+        return {b"EXISTS": len(self.s.folders[name]), b"UIDNEXT": self.s.next_uid + 1,
+                b"UIDVALIDITY": self.s.uidvalidity}
 
     def search(self, criteria):
         assert criteria[0] == "UID" and criteria[1].endswith(":*"), criteria

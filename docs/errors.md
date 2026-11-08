@@ -3,6 +3,10 @@
 Every predictable error starts with a `P2M-` code and exits with code 2 (see the README's exit-code table).
 If the fix below does not help, open an issue with `proton2m365 doctor --issue`.
 
+## P2M-USAGE
+With `--json`: the command line was not understood (an unknown option or a missing argument). The usage
+message is on stderr. Run the command with `--help`.
+
 ## P2M-AUTH-NO-APP
 proton2m365 has no sign-in app of its own: register one (a one-time setup, about 10 minutes, see
 [setup-own-app.md](setup-own-app.md)) and give its client ID and tenant with `--client-id` and `--tenant`,
@@ -89,6 +93,10 @@ must share messages with the state; an export sharing none is a different mailbo
 ## P2M-EXPORT-FORMAT
 The export does not look like the Proton Export Tool format proton2m365 knows. Please open an issue with
 `doctor --issue`; `--allow-unknown-format` tries anyway.
+
+## P2M-IMAP-UIDVALIDITY
+The server renumbered a folder (its UIDVALIDITY changed) between reading it and moving messages, so `dedupe`
+moved nothing. Run it again; it reads the folder afresh.
 
 ## P2M-IMAP-NO-MOVE
 The mail server does not support IMAP MOVE, which `prune` needs. Exchange Online and Outlook.com support it.

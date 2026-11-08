@@ -37,6 +37,9 @@ def _isolated(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     for name in ("PROTON2M365_STATE", "PROTON2M365_CLIENT_ID", "PROTON2M365_TENANT"):
         monkeypatch.delenv(name, raising=False)
+    # Tests never hold off sleep or pop up desktop notifications (tests/test_awake.py turns these back on).
+    monkeypatch.setenv("PROTON2M365_ALLOW_SLEEP", "1")
+    monkeypatch.setenv("PROTON2M365_NO_NOTIFY", "1")
     from proton2m365 import auth
 
     monkeypatch.setattr(auth, "CONFIG_DIR", tmp_path / ".config-proton2m365")

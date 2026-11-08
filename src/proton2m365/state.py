@@ -289,6 +289,18 @@ class State:
         self._transition(proton_id, sorted(IN_MAILBOX),
                          {"stage": SKIPPED, "imap_uid": None, "graph_id": None, "last_error": None})
 
+    def recorded_uid(self, proton_id: str) -> int | None:
+        row = self.conn.execute("SELECT imap_uid FROM messages WHERE proton_id = ?", (proton_id,)).fetchone()
+        return row[0] if row else None
+
+    def mark_deduped(self, proton_id: str, keeper_uid: int | None) -> None:
+        """Extra copies of this message were moved away. The kept copy may not be the one tag found in Graph
+        (its Graph id and categories may belong to a moved copy), so the row goes back to appended: the next
+        `tag` finds the kept copy by its X-Proton-Id and applies categories again, and verify checks it."""
+        self._transition(proton_id, sorted(IN_MAILBOX),
+                         {"stage": APPENDED, "imap_uid": keeper_uid, "graph_id": None, "check_result": None,
+                          "tag_attempts": 0, "last_error": None})
+
     def mark_verified(self, proton_id: str, checked_at: int) -> None:
         self._transition(proton_id, (TAGGED, VERIFIED),
                          {"stage": VERIFIED, "last_error": None, "check_result": "pass", "checked_at": checked_at})
