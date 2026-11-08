@@ -1423,7 +1423,9 @@ def test_cli_dedupe_without_a_terminal_asks_for_yes_and_moves_nothing(cli_world,
     assert "P2M-CONFIRM-NEEDED" in capsys.readouterr().err
     assert server.copies("Archive", "a1") == 2
     assert run("dedupe", "--dry-run") == 0
-    assert "Nothing moved (--dry-run)" in capsys.readouterr().out and server.copies("Archive", "a1") == 2
+    out = capsys.readouterr().out
+    assert "Nothing moved (--dry-run)" in out and server.copies("Archive", "a1") == 2
+    assert "  e.g. a1" in out and "for example" not in out
     assert run("dedupe", "--yes") == 0
     out = capsys.readouterr().out
     assert "Moved 1 extra copies" in out and "proton2m365 tag" in _next_line(out)

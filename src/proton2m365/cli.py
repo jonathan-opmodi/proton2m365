@@ -796,7 +796,7 @@ def cmd_dedupe(args: argparse.Namespace, *, ask: Callable[[str], str] = input) -
             print(f"{report.extra_copies:,} extra copies of {len(report.found):,} messages:")
             for folder, n in sorted(report.by_folder().items(), key=lambda kv: kv[0].casefold()):
                 print(f"  {folder}: {n:,}")
-            print("  for example:" + _list_ids([d.proton_id for d in report.found]))
+            print(_list_ids([d.proton_id for d in report.found]))
         if args.dry_run:
             _result(extra_copies=report.extra_copies, moved=0, by_folder=report.by_folder(), dry_run=True,
                     ids=[d.proton_id for d in report.found])

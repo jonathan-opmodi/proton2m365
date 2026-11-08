@@ -2,7 +2,7 @@
 
 All notable changes to proton2m365. Versions follow the git tags (`vX.Y.Z`).
 
-## Unreleased (v0.2.0)
+## v0.2.0 (2026-11-07)
 
 - A newer export of the same mailbox can be planned into the same state: `migrate NEWER-EXPORT` uploads only
   new messages. Messages the newer export no longer has need `plan --accept-missing`; they stay in the mailbox,
