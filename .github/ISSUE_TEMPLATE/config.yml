@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security issue
+    url: https://github.com/jonathan-opmodi/proton2m365/security/advisories/new
+    about: Please report security problems privately (see SECURITY.md).

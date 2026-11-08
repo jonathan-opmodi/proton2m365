@@ -1,0 +1,28 @@
+name: "Want: personal Microsoft account support"
+description: "Ask for first-class support of Outlook.com / Microsoft 365 Personal or Family."
+labels: ["want: personal account"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Personal accounts work today but are experimental and need a sign-in app registered by hand (docs/setup-own-app.md, route B). Proving and simplifying this is planned; this form counts who needs it.
+        One issue per person is enough; if one already exists, a thumbs-up on it counts too.
+  - type: dropdown
+    id: size
+    attributes:
+      label: How much would you bring?
+      options:
+        - "under 100 items"
+        - "100 to 1,000"
+        - "1,000 to 10,000"
+        - "more than 10,000"
+        - "not sure"
+    validations:
+      required: false
+  - type: textarea
+    id: details
+    attributes:
+      label: Anything else?
+      description: What you would use it for, or what would make it work for you. Please leave out names and addresses.
+    validations:
+      required: false

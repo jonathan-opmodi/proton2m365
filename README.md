@@ -12,7 +12,9 @@ Bridge or a paid Proton plan, and get a receipt that accounts for every message.
 
 Status: v0.1. Microsoft 365 work and school accounts are tested live. **Outlook.com and Microsoft 365
 Personal/Family are experimental** until the live checks in [docs/how-it-works.md](docs/how-it-works.md#outlookcom)
-have passed. Support is best effort through GitHub issues.
+have passed. Support is best effort through GitHub issues. Want contacts and calendar, Gmail, or simpler
+personal-account support? [Open a "Want" issue](https://github.com/jonathan-opmodi/proton2m365/issues/new/choose)
+(or thumbs-up an existing one): those counts decide what comes next.
 
 ## Prerequisites
 

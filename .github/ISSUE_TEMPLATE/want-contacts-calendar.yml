@@ -1,0 +1,28 @@
+name: "Want: contacts and calendar"
+description: "Ask for importing Proton contacts (.vcf) and calendars (.ics) into Microsoft 365."
+labels: ["want: contacts/calendar"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Today proton2m365 moves mail only. Contacts and calendar import is planned but waits on two things: enough people asking (this form counts) and a check that it beats Outlook's own import. Tell us what you would bring.
+        One issue per person is enough; if one already exists, a thumbs-up on it counts too.
+  - type: dropdown
+    id: size
+    attributes:
+      label: How much would you bring?
+      options:
+        - "under 100 items"
+        - "100 to 1,000"
+        - "1,000 to 10,000"
+        - "more than 10,000"
+        - "not sure"
+    validations:
+      required: false
+  - type: textarea
+    id: details
+    attributes:
+      label: Anything else?
+      description: What you would use it for, or what would make it work for you. Please leave out names and addresses.
+    validations:
+      required: false
