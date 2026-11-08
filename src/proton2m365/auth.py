@@ -40,10 +40,18 @@ class AuthError(Exception):
 def _token_cache(path: Path):
     """MSAL cache persisted in the Keychain; falls back to an owner-only file if Keychain is unavailable."""
     from msal_extensions import FilePersistence, PersistedTokenCache, build_encrypted_persistence
+    from msal_extensions.persistence import PersistenceNotFound
 
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
         persistence = build_encrypted_persistence(str(path))
+        # The Keychain can be built yet refuse writes (no default keychain, or a locked one over SSH:
+        # OSError -25307/-25308). Write what is there now, so that failure shows up here and not mid sign-in.
+        try:
+            current = persistence.load()
+        except PersistenceNotFound:
+            current = None
+        persistence.save(current if current else "{}")
     except Exception:  # noqa: BLE001 - any Keychain failure means: use the 0600 file instead
         persistence = FilePersistence(str(path))
         path.touch(exist_ok=True)

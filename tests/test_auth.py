@@ -235,3 +235,25 @@ def test_token_cache_falls_back_to_an_owner_only_file(tmp_path, monkeypatch):
     cache = auth_mod._token_cache(tmp_path / "cfg" / "token_cache.bin")
     assert cache is not None
     assert owner_only(tmp_path / "cfg" / "token_cache.bin")
+
+
+def test_token_cache_falls_back_when_the_keychain_refuses_writes(tmp_path, monkeypatch):
+    """macOS can build a Keychain persistence that then refuses to save (no default keychain, or a locked one
+    over SSH: OSError -25307/-25308). That must fall back to the owner-only file, not crash mid sign-in."""
+    import msal_extensions
+    from msal_extensions.persistence import FilePersistence, PersistenceNotFound
+
+    class LockedKeychain:
+        def load(self):
+            raise PersistenceNotFound(message="empty")
+
+        def save(self, content):
+            raise OSError(-25307)
+
+        def get_location(self):
+            return str(tmp_path / "keychain")
+
+    monkeypatch.setattr(msal_extensions, "build_encrypted_persistence", lambda path: LockedKeychain())
+    cache = auth_mod._token_cache(tmp_path / "cfg" / "token_cache.bin")
+    assert isinstance(cache._persistence, FilePersistence)
+    assert owner_only(tmp_path / "cfg" / "token_cache.bin")
