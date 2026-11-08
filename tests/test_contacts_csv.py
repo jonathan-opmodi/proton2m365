@@ -66,7 +66,7 @@ def test_vcard_30_fills_every_outlook_column():
     assert r["Business Phone"] == "+1 555 0102"
     assert r["Business Fax"] == "+1 555 0103"
     assert r["Pager"] == "+1 555 0104"
-    assert r["Home Street"] == "Apt 4\n1 Main St"
+    assert r["Home Street"] == "Apt 4, 1 Main St"  # one line: Outlook's edit form drops line breaks
     assert (r["Home City"], r["Home State"], r["Home Postal Code"], r["Home Country/Region"]) == \
         ("Springfield", "IL", "62701", "USA")
     assert r["Business City"] == "Shelbyville"

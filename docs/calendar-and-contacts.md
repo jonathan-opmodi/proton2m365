@@ -94,7 +94,9 @@ These go to `contacts.losses.txt` so you can add them by hand:
 Contact groups themselves are not contacts and are not converted; their names come through as categories on
 each member.
 
-Outlook also shows every imported email address as "Other email", whatever type it had in Proton.
+Outlook also shows every imported email address as "Other email", whatever type it had in Proton. A street
+written on two lines in Proton ("Apt 4" and "1 Main St") becomes one line, "Apt 4, 1 Main St": Outlook's edit
+form would otherwise run the lines together.
 
 ### Why not import contacts and calendars directly?
 

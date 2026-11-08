@@ -271,13 +271,14 @@ def convert_card(props: list[Prop]) -> Contact | None:
         types = p.types()
         parts = (_components(p.value) + [""] * 7)[:7]
         po_box, extended, street, city, region, postal, country = parts
-        street_full = "\n".join(x for x in (po_box, extended, street) if x)
+        # one line: Outlook's contact edit form drops line breaks in a street ("Apt 4" + "1 Main St" -> "Apt 41 Main St")
+        street_full = ", ".join(x.replace("\n", ", ") for x in (po_box, extended, street) if x)
         prefixes = (["Home"] if "home" in types else ["Business"] if "work" in types else []) + ["Other", "Home", "Business"]
         target = next((pre for pre in prefixes if not any(row.get(f"{pre} {f}") for f in
                                                             ("Street", "City", "Postal Code"))), None)
         if target is None:
             lost.append(("postal address with no free Outlook column",
-                         ", ".join(x for x in (street_full.replace("\n", " "), city, region, postal, country) if x)))
+                         ", ".join(x for x in (street_full, city, region, postal, country) if x)))
             continue
         row.update({f"{target} Street": street_full, f"{target} City": city, f"{target} State": region,
                     f"{target} Postal Code": postal, f"{target} Country/Region": country})
