@@ -27,7 +27,7 @@ from pathlib import Path
 from .locks import FileLock, LockHeld
 from .status import Progress
 
-SCHEMA_VERSION = 2  # 2: per-row verification evidence (check_result, checked_at)
+SCHEMA_VERSION = 3  # 2: per-row verification evidence (check_result, checked_at); 3: source_present
 
 PLANNED, SKIPPED, UPLOAD_FAILED = "planned", "skipped", "upload_failed"
 APPENDED, TAGGED, TAG_FAILED, VERIFIED = "appended", "tagged", "tag_failed", "verified"
@@ -58,7 +58,8 @@ CREATE TABLE IF NOT EXISTS messages (
     tag_attempts     INTEGER NOT NULL DEFAULT 0,
     last_error       TEXT,
     check_result     TEXT,                   -- latest verify result: 'pass' or 'fail:<check>; <check>'
-    checked_at       INTEGER                 -- Unix seconds of that check
+    checked_at       INTEGER,                -- Unix seconds of that check
+    source_present   INTEGER NOT NULL DEFAULT 1  -- 0 when the newest planned export no longer has this message
 );
 CREATE INDEX IF NOT EXISTS messages_stage ON messages(stage);
 CREATE TABLE IF NOT EXISTS folders (path TEXT PRIMARY KEY, graph_folder_id TEXT);
@@ -116,6 +117,7 @@ class ReplanResult:
     unresolved_drift: list[str] = field(default_factory=list)  # ids whose uploaded folder/date/content differ
     to_prune_by_folder: dict[str, int] = field(default_factory=dict)  # folder -> uploaded messages now skipped
     missing_from_export: list[str] = field(default_factory=list)
+    newly_missing: list[str] = field(default_factory=list)  # not skipped, present before this plan, gone now
 
 
 def _row_values(row: PlanRow) -> dict:
@@ -161,6 +163,8 @@ class WorkRow:
     graph_id: str | None
     upload_attempts: int
     tag_attempts: int
+    sha256: str = ""
+    source_present: bool = True
 
     @classmethod
     def from_db(cls, r: sqlite3.Row) -> WorkRow:
@@ -171,6 +175,8 @@ class WorkRow:
             message_id=r["message_id"], synth_message_id=bool(r["synth_message_id"]),
             needs_reencode=bool(r["needs_reencode"]), stage=r["stage"], imap_uid=r["imap_uid"],
             graph_id=r["graph_id"], upload_attempts=r["upload_attempts"], tag_attempts=r["tag_attempts"],
+            sha256=r["sha256"],
+            source_present=bool(r["source_present"]) if "source_present" in r.keys() else True,
         )
 
 
@@ -197,16 +203,18 @@ class State:
     def rows(self) -> Iterator[sqlite3.Row]:
         yield from self.conn.execute("SELECT * FROM messages ORDER BY proton_id")
 
-    def _work_rows(self, stages: Iterable[str]) -> list[WorkRow]:
+    def _work_rows(self, stages: Iterable[str], *, present_only: bool = False) -> list[WorkRow]:
         stages = list(stages)
         # Rows in the mailbox that a re-plan now skips wait for `prune`; nothing else touches them.
+        present = " AND source_present = 1" if present_only else ""
         query = (f"SELECT * FROM messages WHERE stage IN ({', '.join('?' for _ in stages)}) "
-                 "AND skip_reason IS NULL ORDER BY target_folder, internal_date, proton_id")
+                 f"AND skip_reason IS NULL{present} ORDER BY target_folder, internal_date, proton_id")
         return [WorkRow.from_db(r) for r in self.conn.execute(query, stages)]
 
     def rows_to_upload(self, *, retry_failed: bool = False) -> list[WorkRow]:
-        """Planned rows; with retry_failed, only upload_failed rows (a plain run never touches them)."""
-        return self._work_rows([UPLOAD_FAILED] if retry_failed else [PLANNED])
+        """Planned rows; with retry_failed, only upload_failed rows (a plain run never touches them).
+        Rows missing from the newest export have no file to send and are left out."""
+        return self._work_rows([UPLOAD_FAILED] if retry_failed else [PLANNED], present_only=True)
 
     def rows_to_tag(self, *, retry_failed: bool = False) -> list[WorkRow]:
         """Appended rows; with retry_failed, only tag_failed rows. Tagging never re-uploads."""
@@ -246,6 +254,11 @@ class State:
         self._transition(proton_id, (PLANNED, UPLOAD_FAILED),
                          {"stage": stage, "upload_attempts": attempts, "last_error": error[:500]})
         return stage
+
+    def mark_source_changed(self, proton_id: str, detail: str) -> None:
+        """The export file no longer matches the plan (same path, different bytes): the row stays where it is,
+        nothing is uploaded, and the next `plan` reads the file again."""
+        self._transition(proton_id, (PLANNED, UPLOAD_FAILED), {"last_error": f"source-changed: {detail}"[:500]})
 
     def mark_tagged(self, proton_id: str, graph_id: str) -> None:
         self._transition(proton_id, (APPENDED, TAG_FAILED),
@@ -293,10 +306,15 @@ class State:
         """Counts for status.migration_status. In-mailbox rows a re-plan now skips count only as waiting_prune."""
         has_checks = "check_result" in {r[1] for r in self.conn.execute("PRAGMA table_info(messages)")}
         bad = "COALESCE(check_result LIKE 'fail:%', 0)" if has_checks else "0"
+        has_presence = "source_present" in {r[1] for r in self.conn.execute("PRAGMA table_info(messages)")}
+        present = "source_present" if has_presence else "1"
         counts = Counter()
-        for stage, waiting, failed, n in self.conn.execute(
-                f"SELECT stage, skip_reason IS NOT NULL, {bad}, COUNT(*) FROM messages GROUP BY 1, 2, 3"):
-            if stage == SKIPPED:
+        for stage, waiting, failed, here, n in self.conn.execute(
+                f"SELECT stage, skip_reason IS NOT NULL, {bad}, {present}, COUNT(*) FROM messages "
+                "GROUP BY 1, 2, 3, 4"):
+            if not here and stage in (PLANNED, UPLOAD_FAILED):
+                counts["missing_source"] += n  # never uploaded and no longer in the export (accepted at plan)
+            elif stage == SKIPPED:
                 counts["skipped"] += n
             elif waiting and stage in IN_MAILBOX:
                 counts["waiting_prune"] += n
@@ -306,13 +324,28 @@ class State:
                 counts[stage] += n
         counts["drift"] = len(self.unresolved_drift())
         counts["upload_rejected"] = self.conn.execute(
-            "SELECT COUNT(*) FROM messages WHERE stage = ? AND (last_error LIKE 'rejected:%' "
+            f"SELECT COUNT(*) FROM messages WHERE stage = ? AND {present} = 1 AND (last_error LIKE 'rejected:%' "
             "OR last_error LIKE 'cannot read%')", (UPLOAD_FAILED,)).fetchone()[0]
+        counts["source_changed"] = self.conn.execute(
+            f"SELECT COUNT(*) FROM messages WHERE stage IN (?, ?) AND {present} = 1 "
+            "AND last_error LIKE 'source-changed:%'", (PLANNED, UPLOAD_FAILED)).fetchone()[0]
+        if has_presence:
+            counts["missing_in_mailbox"] = self.conn.execute(
+                f"SELECT COUNT(*) FROM messages WHERE source_present = 0 AND stage IN "
+                f"({', '.join('?' for _ in IN_MAILBOX)})", sorted(IN_MAILBOX)).fetchone()[0]
         return Progress(**counts)
 
     def active_ids(self) -> set[str]:
-        """Every row that is not skipped (these must still have their export files)."""
-        return {r[0] for r in self.conn.execute("SELECT proton_id FROM messages WHERE stage != ?", (SKIPPED,))}
+        """Every row that is not skipped and that the newest export still had (these need their files)."""
+        has_presence = "source_present" in {r[1] for r in self.conn.execute("PRAGMA table_info(messages)")}
+        present = " AND source_present = 1" if has_presence else ""
+        return {r[0] for r in self.conn.execute(f"SELECT proton_id FROM messages WHERE stage != ?{present}",
+                                                (SKIPPED,))}
+
+    def missing_source_ids(self) -> list[str]:
+        """Rows the newest export no longer has (accepted with plan --accept-missing)."""
+        return [r[0] for r in self.conn.execute(
+            "SELECT proton_id FROM messages WHERE source_present = 0 ORDER BY proton_id")]
 
     def all_ids(self) -> set[str]:
         return {r[0] for r in self.conn.execute("SELECT proton_id FROM messages")}
@@ -389,7 +422,7 @@ class State:
                           "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (key, value))
 
     def apply_plan(self, rows: Iterable[PlanRow], *, settings: dict | None = None,
-                   accept_drift: bool = False) -> ReplanResult:
+                   accept_drift: bool = False, meta: dict[str, str] | None = None) -> ReplanResult:
         """Upsert plan rows. Never re-plans mail already in the mailbox: changes to its folder, date or content
         are recorded as unresolved drift (verify stays INCOMPLETE) until accepted with accept_drift."""
         result = ReplanResult()
@@ -408,7 +441,19 @@ class State:
                     self._replan_not_uploaded(old, values, result)
                 else:
                     self._replan_uploaded(old, values, result)
-            result.missing_from_export = sorted(set(existing) - seen_ids)
+            missing = set(existing) - seen_ids
+            result.missing_from_export = sorted(missing)
+            result.newly_missing = sorted(pid for pid in missing if existing[pid]["stage"] != SKIPPED
+                                          and existing[pid]["source_present"])
+            if missing:
+                self.conn.executemany("UPDATE messages SET source_present = 0 WHERE proton_id = ?",
+                                      [(pid,) for pid in sorted(missing)])
+            back = [pid for pid in seen_ids if pid in existing and not existing[pid]["source_present"]]
+            if back:  # in the export again: the row keeps its stage
+                self.conn.executemany("UPDATE messages SET source_present = 1 WHERE proton_id = ?",
+                                      [(pid,) for pid in sorted(back)])
+            for key, value in (meta or {}).items():
+                self.set_meta(key, value)
             if settings is not None:
                 self.set_meta("plan_settings", json.dumps(settings, sort_keys=True))
             accepted = json.loads(self.get_meta(ACCEPTED_DRIFT_META) or "{}")
@@ -525,7 +570,8 @@ def _stored_version(conn: sqlite3.Connection) -> int | None:
 def _upgrade(conn: sqlite3.Connection, path: Path, version: int) -> None:
     """Back the state up (SQLite backup API, so nothing still in the WAL is missed), then migrate in one transaction."""
     backup_path = path.with_name(f"{path.name}.bak-v{version}")
-    if not backup_path.exists():
+    if not _backup_ok(backup_path, version):
+        backup_path.unlink(missing_ok=True)  # an interrupted backup: make it again
         backup = sqlite3.connect(backup_path)
         try:
             conn.backup(backup)
@@ -538,8 +584,27 @@ def _upgrade(conn: sqlite3.Connection, path: Path, version: int) -> None:
             conn.execute("ALTER TABLE messages ADD COLUMN checked_at INTEGER")
             # Rows verified before v2 passed every check at some unknown time.
             conn.execute("UPDATE messages SET check_result = 'pass' WHERE stage = ?", (VERIFIED,))
+        columns = {r[1] for r in conn.execute("PRAGMA table_info(messages)")}
+        if version < 3 and "source_present" not in columns:
+            conn.execute("ALTER TABLE messages ADD COLUMN source_present INTEGER NOT NULL DEFAULT 1")
         conn.execute("UPDATE meta SET value = ? WHERE key = 'schema_version'", (str(SCHEMA_VERSION),))
     conn.executescript(_SCHEMA)  # indexes and tables added since; all IF NOT EXISTS
+
+
+def _backup_ok(backup_path: Path, version: int) -> bool:
+    """An existing backup counts only if SQLite reads it as whole and it holds the version being upgraded."""
+    if not backup_path.exists():
+        return False
+    try:
+        conn = sqlite3.connect(f"file:{backup_path}?mode=ro", uri=True)
+        try:
+            if conn.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+                return False
+            return _stored_version(conn) == version
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return False
 
 
 @contextmanager

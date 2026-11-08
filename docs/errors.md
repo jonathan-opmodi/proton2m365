@@ -46,6 +46,11 @@ mailbox.
 The state file was made before proton2m365 recorded mailboxes and already has mail in one. If the signed-in
 mailbox is the right one, run the command again with `--bind-account`.
 
+## P2M-LEASE-LOST
+This run was paused longer than its mailbox lease (for example the computer slept) and another computer took
+over the mailbox meanwhile, so it stopped before writing anything else. Nothing is lost: when the other run has
+finished, run the same command again to resume.
+
 ## P2M-MAILBOX-BUSY
 Another proton2m365 run is uploading into the same mailbox, on this computer or another one (proton2m365 keeps
 a small lease message in the folder `_proton2m365_lease` while it works). Wait for it to finish. If no other run
@@ -69,9 +74,17 @@ command again.
 ## P2M-STATE-NEWER
 The state file was written by a newer proton2m365. Upgrade (`pipx upgrade proton2m365`).
 
+## P2M-CONFIRM-NEEDED
+The command would change something you have to agree to first, and could not ask (no terminal, or `--json`).
+The message says what and how many. For `plan`: messages planned from an earlier export are missing from this
+one; if they were deleted in Proton or left out on purpose, run `plan` again with `--accept-missing` (they stay
+in the mailbox and are listed in the receipt); if the export is incomplete, export again from Proton. For
+`dedupe`: run it with `--dry-run` to see the copies, then with `--yes`.
+
 ## P2M-EXPORT-CHANGED
 The export this state was planned from is missing or different. Put it back where it was, or `plan` again with
-its new location.
+its new location. A newer export of the same mailbox is accepted by `plan` (and `migrate <new export>`): it
+must share messages with the state; an export sharing none is a different mailbox and needs its own `--state`.
 
 ## P2M-EXPORT-FORMAT
 The export does not look like the Proton Export Tool format proton2m365 knows. Please open an issue with

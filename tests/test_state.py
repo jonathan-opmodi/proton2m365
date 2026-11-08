@@ -6,7 +6,7 @@ import textwrap
 
 import pytest
 
-from proton2m365.state import PlanRow, StateError, StateLocked, open_state
+from proton2m365.state import SCHEMA_VERSION, PlanRow, StateError, StateLocked, open_state
 
 from .conftest import owner_only
 
@@ -261,7 +261,8 @@ def test_v1_state_upgrades_with_backup(tmp_path):
     _make_v1(path)
     with open_state(path) as s:
         assert {"check_result", "checked_at"} <= _columns(s.conn)
-        assert s.get_meta("schema_version") == "2"
+        assert s.get_meta("schema_version") == str(SCHEMA_VERSION)
+        assert "source_present" in _columns(s.conn)
         assert s.conn.execute("SELECT check_result FROM messages WHERE proton_id = 'a'").fetchone()[0] == "pass"
         assert s.failed_check_ids() == set()
     backup = tmp_path / "state.sqlite.bak-v1"
@@ -332,3 +333,15 @@ def test_newer_state_is_refused_and_left_unchanged(tmp_path):
         with open_state(path):
             pass
     assert path.read_bytes() == before
+
+
+def test_an_interrupted_backup_is_made_again(tmp_path):
+    import sqlite3
+    path = tmp_path / "state.sqlite"
+    _make_v1(path)
+    (tmp_path / "state.sqlite.bak-v1").write_bytes(b"half a database")   # an earlier upgrade was cut off
+    with open_state(path):
+        pass
+    b = sqlite3.connect(tmp_path / "state.sqlite.bak-v1")
+    assert b.execute("SELECT COUNT(*) FROM messages").fetchone()[0] == 2
+    b.close()

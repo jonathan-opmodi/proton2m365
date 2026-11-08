@@ -109,13 +109,20 @@ class GraphStore:
         """The message as Exchange stores it (MIME), for verify --content."""
         return self.request("GET", f"/me/messages/{graph_id}/$value", raw=True)
 
-    def request(self, method: str, url: str, *, raw: bool = False, **kwargs):
-        """One Graph call, retrying 429/503/504 after Retry-After. raw=True returns the body bytes."""
+    def request(self, method: str, url: str, *, raw: bool = False, idempotent: bool | None = None, **kwargs):
+        """One Graph call, retrying after Retry-After. raw=True returns the body bytes.
+
+        429 is always retried (Graph refused the call before running it). 503/504 are retried only for
+        idempotent calls: a POST that creates something may have run before the error, so it is never
+        repeated blindly; its caller looks the item up first (see create_once)."""
+        if idempotent is None:
+            idempotent = method.upper() != "POST"
+        retry_on = (429, 503, 504) if idempotent else (429,)
         extra = kwargs.pop("headers", {})
         for attempt in range(MAX_RETRIES + 1):
             headers = {"Authorization": f"Bearer {self.token()}", **extra}
             response = self.http.request(method, url, headers=headers, **kwargs)
-            if response.status_code in (429, 503, 504) and attempt < MAX_RETRIES:
+            if response.status_code in retry_on and attempt < MAX_RETRIES:
                 wait = float(response.headers.get("Retry-After", 2 ** attempt))
                 self.say(f"Graph asked us to wait {wait:.0f}s")
                 self.sleep(wait)
@@ -126,6 +133,27 @@ class GraphStore:
                 return response.content
             return response.json() if response.content else {}
         raise GraphError(429, "still throttled after retries")
+
+    def create_once(self, create: Callable[[], dict], exists: Callable[[], bool]) -> dict | None:
+        """Create something exactly once. After an ambiguous failure (503/504, a timeout, a lost connection) the
+        create may already have happened, so look it up before trying again. Returns the create's response, or
+        None when the lookup found it already there."""
+        for attempt in range(MAX_RETRIES + 1):
+            try:
+                return create()
+            except GraphError as exc:
+                if exc.status == 409:  # Graph says it exists
+                    return None
+                if exc.status not in (503, 504) or attempt == MAX_RETRIES:
+                    raise
+            except httpx.TransportError:
+                if attempt == MAX_RETRIES:
+                    raise
+            if exists():
+                return None
+            self.say("Graph did not confirm a create; it is not there, so trying again")
+            self.sleep(2 ** attempt)
+        return None
 
     def paged(self, url: str, params: dict | None = None) -> Iterator[dict]:
         page = self.request("GET", url, params=params)
@@ -147,10 +175,13 @@ class GraphStore:
             wait = 0.0
             for start in range(0, len(pending), BATCH_SIZE):
                 chunk = pending[start:start + BATCH_SIZE]
-                body = self.request("POST", "/$batch", json={"requests": chunk})
+                safe = all(r.get("method", "GET").upper() != "POST" for r in chunk)
+                body = self.request("POST", "/$batch", json={"requests": chunk}, idempotent=safe)
                 by_id = {r["id"]: r for r in chunk}
                 for item in body.get("responses", []):
-                    if item.get("status") in (429, 503, 504):
+                    sub = by_id[item["id"]]
+                    again = (429, 503, 504) if sub.get("method", "GET").upper() != "POST" else (429,)
+                    if item.get("status") in again:
                         retry.append(by_id[item["id"]])
                         wait = max(wait, float((item.get("headers") or {}).get("Retry-After", 5)))
                     else:
@@ -307,7 +338,11 @@ class GraphStore:
             if name.casefold() in existing:
                 continue
             preset = "preset3" if name == STARRED_CATEGORY and not color else nearest_preset(color)
-            self.request("POST", "/me/outlook/masterCategories", json={"displayName": name, "color": preset})
+            self.create_once(
+                lambda name=name, preset=preset: self.request(
+                    "POST", "/me/outlook/masterCategories", json={"displayName": name, "color": preset}),
+                lambda name=name: any(c["displayName"].casefold() == name.casefold()
+                                      for c in self.paged("/me/outlook/masterCategories")))
             existing.add(name.casefold())
             created.append(name)
         return created

@@ -10,7 +10,7 @@ Account:
 Mailbox:
   not run: not signed in
 State:
-  state file: <path HASH>, schema 2
+  state file: <path HASH>, schema 3
   planned: 34
   skipped: 6
   skipped draft: 2

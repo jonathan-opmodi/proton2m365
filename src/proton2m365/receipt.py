@@ -19,6 +19,10 @@ recognises a receipt by it). Entry outcomes:
     orphan-metadata        a .metadata.json file with no .eml
     unreadable             an export file plan could not read (partial, empty or damaged)
     in-state-not-in-export a planned message whose export files are gone
+    missing-from-newer-export-never-uploaded  not uploaded, and the newest export no longer has it (accepted with
+                           plan --accept-missing)
+Entries for messages the newest export no longer has carry "source": "missing-from-newer-export"; their
+checks cover presence and metadata only (no content comparison).
     excluded-by-user       an export file left out on purpose with plan --exclude-file
 """
 
@@ -67,7 +71,10 @@ def tool_version() -> str:
 def _row_entry(row, missing: set[str]) -> dict:
     stage, skip, check = row["stage"], row["skip_reason"], row["check_result"] if "check_result" in row.keys() else None
     pid = row["proton_id"]
-    if pid in missing:
+    present = bool(row["source_present"]) if "source_present" in row.keys() else True
+    if not present and stage in ("planned", "upload_failed"):
+        outcome = "missing-from-newer-export-never-uploaded"
+    elif pid in missing:
         outcome = "in-state-not-in-export"
     elif stage == "skipped":
         outcome = f"skipped:{skip}"
@@ -90,6 +97,8 @@ def _row_entry(row, missing: set[str]) -> dict:
              "checks": "pass" if check == "pass" else (check or "not-checked")}
     if outcome.startswith("failed:") and row["last_error"]:
         entry["error"] = row["last_error"]
+    if not present:
+        entry["source"] = "missing-from-newer-export"
     return entry
 
 

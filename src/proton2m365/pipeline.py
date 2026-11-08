@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import random
 import time
@@ -232,20 +233,60 @@ def build_plan_rows(
     return rows, report
 
 
+class ConfirmNeeded(pe.ExportError):
+    """A plan would change state in a way the user must accept first (P2M-CONFIRM-NEEDED)."""
+
+
+def check_same_mailbox(state: State, rows: list[PlanRow], export_dir: Path, *, accept_missing: bool) -> None:
+    """A newer export of the same mailbox shares Proton message ids with the state (they are unique per message).
+    Refuse an export sharing none; ask before marking messages as missing from the export."""
+    known = state.all_ids()
+    if not known:
+        return
+    ids = {r.proton_id for r in rows}
+    if not ids & known:
+        raise pe.ExportError(
+            f"P2M-EXPORT-CHANGED: the export at {export_dir} shares no message with this state's "
+            f"{len(known):,} messages, so it is a different mailbox. Use a new --state for it")
+    active = state.active_ids()
+    newly_missing = sorted(active - ids)
+    if newly_missing and not accept_missing:
+        shown = ", ".join(newly_missing[:3]) + (" ..." if len(newly_missing) > 3 else "")
+        raise ConfirmNeeded(
+            f"P2M-CONFIRM-NEEDED: {len(newly_missing):,} of this state's {len(active):,} messages are missing "
+            f"from the export at {export_dir} ({shown}). If they were deleted in Proton or left out of this "
+            "export on purpose, run plan again with --accept-missing (they stay in the mailbox and are listed in "
+            "the receipt); if the export is incomplete, export again from Proton")
+
+
 def plan_export(
     export_dir: Path, settings: PlanSettings, *, state_path: Path | None,
     progress: Callable[[int, int], None] | None = None, extra: dict | None = None, accept_drift: bool = False,
+    accept_missing: bool = False,
 ) -> PlanReport:
-    """Plan every message and write it to state (unless `state_path` is None: dry run)."""
+    """Plan every message and write it to state (unless `state_path` is None: dry run).
+    Rows, settings and the export fingerprint are written in one transaction."""
     if state_path is None:
         return build_plan_rows(export_dir, settings, progress=progress)[1]
     with open_state(state_path, create=True) as state:  # lock before reading the export: no interleaved plans
-        rows, report = build_plan_rows(export_dir, settings, progress=progress)
-        recorded = asdict(settings) | {"export_dir": str(Path(export_dir)), **(extra or {}),
-                                       "sample": (Path(export_dir) / SAMPLE_MARKER).exists()}
-        report.replan = state.apply_plan(rows, settings=recorded, accept_drift=accept_drift)
-        state.record_meta("export_fingerprint", json.dumps(pe.export_fingerprint(export_dir)))
+        report = plan_into(state, export_dir, settings, progress=progress, extra=extra, accept_drift=accept_drift,
+                           accept_missing=accept_missing)
         report.state_path = Path(state_path)
+    return report
+
+
+def plan_into(
+    state: State, export_dir: Path, settings: PlanSettings, *, progress: Callable[[int, int], None] | None = None,
+    extra: dict | None = None, accept_drift: bool = False, accept_missing: bool = False,
+) -> PlanReport:
+    """Plan an export into an open (locked) state. Nothing is written when a check refuses the export."""
+    rows, report = build_plan_rows(export_dir, settings, progress=progress)
+    check_same_mailbox(state, rows, Path(export_dir), accept_missing=accept_missing)
+    recorded = asdict(settings) | {"export_dir": str(Path(export_dir)), **(extra or {}),
+                                   "sample": (Path(export_dir) / SAMPLE_MARKER).exists()}
+    report.replan = state.apply_plan(
+        rows, settings=recorded, accept_drift=accept_drift,
+        meta={"export_fingerprint": json.dumps(pe.export_fingerprint(export_dir))})
     return report
 
 
@@ -260,6 +301,7 @@ class UploadReport:
     rejected: list[tuple[str, str]] = field(default_factory=list)
     gave_up: list[tuple[str, str]] = field(default_factory=list)
     unreadable: list[tuple[str, str]] = field(default_factory=list)
+    source_changed: list[str] = field(default_factory=list)  # export file differs from what plan read
     created_folders: list[str] = field(default_factory=list)
     stopped: str | None = None          # why the run ended early (quota, Ctrl-C, connection)
     seconds: float = 0.0
@@ -302,6 +344,10 @@ def upload_run(
             except OSError as exc:
                 state.record_upload_failure(row.proton_id, f"cannot read {row.eml_path}: {exc}", permanent=True)
                 report.unreadable.append((row.proton_id, str(exc)))
+                continue
+            if row.sha256 and hashlib.sha256(raw).hexdigest() != row.sha256:
+                state.mark_source_changed(row.proton_id, f"{row.eml_path} differs from what plan read")
+                report.source_changed.append(row.proton_id)
                 continue
             message = prepare_message(
                 raw, proton_id=row.proton_id, needs_reencode=row.needs_reencode,
@@ -604,8 +650,8 @@ def verify_run(
     for i, row in enumerate(chosen, 1):
         report.checked += 1
         problems = _check_message(row, messages.get(row.graph_id), folder_ids.get(row.target_folder))
-        if content and messages.get(row.graph_id) is not None:
-            problems += _check_content(row, graph)
+        if content and messages.get(row.graph_id) is not None and row.source_present:
+            problems += _check_content(row, graph)  # rows missing from the newest export: presence only
             report.content_checked += 1
             if status is not None:
                 status.update(f"  verify: content {i:,}/{len(chosen):,}")

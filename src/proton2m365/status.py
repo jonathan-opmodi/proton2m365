@@ -60,6 +60,9 @@ class Progress:
     waiting_prune: int = 0
     skipped: int = 0
     drift: int = 0           # uploaded messages whose folder, date or content the current plan changes
+    missing_source: int = 0  # never uploaded and missing from the newest export (accepted with --accept-missing)
+    missing_in_mailbox: int = 0  # in the mailbox, missing from the newest export (still checked by presence)
+    source_changed: int = 0  # planned, but the export file changed since plan (plan again reads it)
 
     @property
     def in_mailbox(self) -> int:
@@ -67,7 +70,8 @@ class Progress:
 
     @property
     def total(self) -> int:
-        return self.planned + self.upload_failed + self.in_mailbox + self.waiting_prune + self.skipped
+        return (self.planned + self.upload_failed + self.in_mailbox + self.waiting_prune + self.skipped
+                + self.missing_source)
 
 
 @dataclass(frozen=True)
@@ -131,7 +135,10 @@ def migration_status(
     if export is not None and export.missing_from_export:
         work.append((f"{_count(len(export.missing_from_export), 'planned message')} no longer in the export: "
                      + _names(export.missing_from_export), "check the export folder, then run `plan` again", None))
-    if progress.planned:
+    if progress.source_changed:
+        work.append((f"{progress.source_changed:,} export files changed after they were planned (not uploaded)",
+                     "check the export is the one you meant, then " + cmd("plan", "<export>"), None))
+    if progress.planned - progress.source_changed > 0:
         work.append((f"{progress.planned:,} planned, not uploaded yet", None, cmd("upload")))
     if progress.upload_failed - progress.upload_rejected:
         work.append((f"{progress.upload_failed - progress.upload_rejected:,} failed to upload (worth retrying)",
@@ -154,6 +161,13 @@ def migration_status(
         work.append((f"{progress.waiting_prune:,} uploaded messages the plan now skips are waiting for prune",
                      None, cmd("prune")))
     reasons = [w[0] for w in work]
+    notes = []
+    if progress.missing_source:
+        notes.append(f"{progress.missing_source:,} messages missing from the newer export were never uploaded "
+                     "(accepted with plan --accept-missing; listed in the receipt)")
+    if progress.missing_in_mailbox:
+        notes.append(f"{progress.missing_in_mailbox:,} messages in the mailbox are missing from the newer export "
+                     "(checked by presence only; listed in the receipt)")
 
     if checks.mismatched or progress.failed_check or checks.folders_short or checks.duplicated:
         failed = max(checks.mismatched, progress.failed_check)
@@ -173,10 +187,12 @@ def migration_status(
 
     if work:
         _, hint, command = work[0]
-        remaining = progress.total - progress.verified - progress.skipped - progress.unchecked
+        remaining = (progress.total - progress.verified - progress.skipped - progress.unchecked
+                     - progress.missing_source)
         sentence = f"nothing is wrong yet; {remaining:,} messages still need work" if remaining else \
             "nothing is wrong yet; some export files still need attention"
-        return MigrationStatus(Outcome.INCOMPLETE, EXIT_INCOMPLETE, sentence, command, hint or command or "", reasons)
+        return MigrationStatus(Outcome.INCOMPLETE, EXIT_INCOMPLETE, sentence, command, hint or command or "",
+                               reasons + notes)
 
     if progress.unchecked or export is None:
         if progress.unchecked:
@@ -186,15 +202,17 @@ def migration_status(
         return MigrationStatus(
             Outcome.SAMPLE_OK, EXIT_SAMPLE_OK,
             f"checked messages are correct; {progress.unchecked:,} not yet checked", cmd("verify", "--all"),
-            cmd("verify", "--all"), reasons)
+            cmd("verify", "--all"), reasons + notes)
 
     if not progress.verified:
         sentence = "nothing to migrate" if not progress.skipped else \
             f"nothing to migrate; all {progress.skipped:,} messages are intentionally skipped"
     else:
         sentence = f"all {progress.verified:,} messages are in the mailbox and checked"
+    if progress.missing_source or progress.missing_in_mailbox:
+        sentence += "; " + "; ".join(notes)
     return MigrationStatus(Outcome.PASSED, EXIT_OK, sentence, None,
-                           "nothing left to do; keep your Proton export until you are satisfied", reasons)
+                           "nothing left to do; keep your Proton export until you are satisfied", reasons + notes)
 
 
 def next_line(s: MigrationStatus) -> str:

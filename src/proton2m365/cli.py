@@ -365,7 +365,8 @@ def render_plan(r: pipeline.PlanReport) -> str:
             for folder, n in sorted(rp.to_prune_by_folder.items(), key=lambda kv: (-kv[1], kv[0].casefold())):
                 out += _row(folder, f"{n:>9,}")
         if rp.missing_from_export:
-            out += [f"  {len(rp.missing_from_export):,} rows in state are no longer in this export (left as is)",
+            out += [f"  {len(rp.missing_from_export):,} messages in state are missing from this export (kept in the "
+                    "mailbox, not uploaded if they were not yet; listed in the receipt)",
                     _examples(rp.missing_from_export)]
     return "\n".join(out) + "\n"
 
@@ -461,7 +462,7 @@ def cmd_plan(args: argparse.Namespace) -> int:
             export_dir, settings,
             state_path=None if args.dry_run else Path(args.state),
             progress=_progress if sys.stderr.isatty() else None,
-            extra={"export_format": fmt}, accept_drift=args.accept_drift,
+            extra={"export_format": fmt}, accept_drift=args.accept_drift, accept_missing=args.accept_missing,
         )
     except (pe.ExportError, StateError) as exc:
         print(f"plan: {exc}", file=sys.stderr)
@@ -706,10 +707,13 @@ def cmd_upload(args: argparse.Namespace) -> int:
                              ("unreadable .eml", r.unreadable)):
             if items:
                 print(f"  {len(items):,} {label}:" + _list_ids(items))
+        if r.source_changed:
+            print(f"  {len(r.source_changed):,} not uploaded because the export file changed after plan "
+                  "(run plan again to read it):" + _list_ids(r.source_changed))
         _result(sent=r.sent, already_there=r.already_there, bytes_sent=r.bytes_sent, remaining=r.remaining,
                 per_hour=round(r.rate_per_hour, 1), stopped=r.stopped,
                 rejected=[x[0] for x in r.rejected], gave_up=[x[0] for x in r.gave_up],
-                unreadable=[x[0] for x in r.unreadable])
+                unreadable=[x[0] for x in r.unreadable], source_changed=r.source_changed)
         if r.stopped:
             print(f"Stopped: {r.stopped}")
             if not r.stopped.startswith("mailbox full"):
@@ -720,7 +724,8 @@ def cmd_upload(args: argparse.Namespace) -> int:
         if r.sent or r.already_there:
             print("Mail is in the mailbox; categories and flags are not applied yet.")
         _print_next(state, args)
-        return st.EXIT_INCOMPLETE if (r.rejected or r.gave_up or r.unreadable or r.remaining) else st.EXIT_OK
+        return st.EXIT_INCOMPLETE if (r.rejected or r.gave_up or r.unreadable or r.source_changed
+                                      or r.remaining) else st.EXIT_OK
     return _run_online(args, body)
 
 
@@ -1015,7 +1020,21 @@ def cmd_migrate(args: argparse.Namespace, *, wait: Callable[[float], None] = tim
             != st.EXIT_OK:
         return code
     step(2, "plan")
+    recorded_export = None
     if Path(args.state).exists():
+        with open_state(Path(args.state), write=False) as s:
+            recorded_export = json.loads(s.get_meta("plan_settings") or "{}").get("export_dir")
+    try:
+        new_export = pe.resolve_export_dir(Path(args.export_dir)).resolve()
+    except pe.ExportError:
+        new_export = Path(args.export_dir).resolve()
+    if recorded_export and Path(recorded_export).resolve() != new_export:
+        print(f"{new_export} is a different export from the one planned ({recorded_export}): planning it as a "
+              "top-up of the same mailbox (only new messages are uploaded).")
+        if (code := main(["plan", args.export_dir, *state,
+                          *(["--accept-missing"] if args.accept_missing else [])])) != st.EXIT_OK:
+            return code
+    elif Path(args.state).exists():
         print(f"Using the plan in {Path(args.state).resolve()} (run `plan` yourself to change the selection).")
     else:
         plan_flags = [x for label in args.exclude_label for x in ("--exclude-label", label)]
@@ -1135,6 +1154,9 @@ def build_parser() -> argparse.ArgumentParser:
                       help="plan an export whose format proton2m365 does not recognise (recorded in the state)")
     plan.add_argument("--accept-drift", action="store_true",
                       help="keep already-uploaded messages as they are when this plan would put them elsewhere")
+    plan.add_argument("--accept-missing", action="store_true",
+                      help="accept that messages planned from an earlier export are missing from this one "
+                           "(deleted in Proton or left out); they stay in the mailbox and are listed in the receipt")
     plan.add_argument("--dry-run", action="store_true", help="print the plan without writing state")
     plan.set_defaults(func=cmd_plan)
 
@@ -1210,6 +1232,7 @@ def build_parser() -> argparse.ArgumentParser:
     mig.add_argument("--yes", action="store_true", help="do not ask before uploading (and as for upload)")
     mig.add_argument("--sample-ok", action="store_true", help="as for upload")
     mig.add_argument("--skip-selftest", action="store_true", help="do not run selftest first")
+    mig.add_argument("--accept-missing", action="store_true", help="as for plan (a newer export of the same mailbox)")
     mig.add_argument("--break-lease", action="store_true", help="as for upload")
     mig.set_defaults(func=cmd_migrate)
 

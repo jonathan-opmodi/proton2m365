@@ -34,6 +34,17 @@ class LeaseHeld(Exception):
         self.expires = expires
 
 
+class LeaseLost(LeaseHeld):
+    """Our lease was taken over while this run was paused (the computer slept, or a long wait)."""
+
+    def __init__(self, expires: int):
+        Exception.__init__(
+            self, "P2M-LEASE-LOST: another computer took over this mailbox while this run was paused (for example "
+            "while the computer slept), so this run stopped before writing anything else. Nothing is lost: when the "
+            "other run has finished, run the same command again to resume")
+        self.expires = expires
+
+
 def _parse(pid: str) -> tuple[str, int] | None:
     if not pid.startswith(PREFIX):
         return None
@@ -96,9 +107,19 @@ class MailboxLease:
             raise LeaseHeld(max(exp for _, exp in rival))
 
     def renew(self) -> None:
-        """Called while working; replaces the lease message once a third of its time has passed."""
+        """Called while working; replaces the lease message once a third of its time has passed.
+
+        Before writing it checks the lease is still ours: if this run was paused past its lease (a sleeping
+        computer) and another computer took over, it raises LeaseLost instead of carrying on beside it."""
         if self.mine is None or self.clock() - self.renewed < self.ttl / 3:
             return
+        now = self.clock()
+        leases = self._leases()
+        ours = next((uid for uid, pid, _, _ in leases if pid == self.mine), None)
+        rivals = [(uid, exp) for uid, _, h, exp in leases if h != self.holder and exp > now]
+        if ours is None or rivals:
+            self.mine = None
+            raise LeaseLost(max((exp for _, exp in rivals), default=int(now)))
         old = self.mine
         self.mine = self._append()
         self.renewed = self.clock()

@@ -15,7 +15,8 @@ from proton2m365 import graph_store as gs
 from proton2m365 import imap_store as im
 from proton2m365 import pipeline
 from proton2m365.state import open_state
-from proton2m365.status import Outcome
+from proton2m365 import proton_export as pe
+from proton2m365.status import Outcome, migration_status
 
 from .conftest import ExportBuilder, eml_bytes, owner_only
 from .test_imap_store import FakeClient, FakeClock, FakeServer
@@ -1216,3 +1217,132 @@ def test_migrate_retries_tag_while_graph_catches_up(cli_world, capsys, passing_s
 
     assert cli.cmd_migrate(_migrate_args(cli_world, "--yes"), wait=wait) == 0
     assert waits == [cli.TAG_RETRY_WAIT]
+
+
+# --- top-up: a newer export of the same mailbox (v0.2.0) --------------------------------------------------
+
+def _newer_export(world, tmp_path, name="newer"):
+    """A copy of the world's export in another folder, standing in for a later Proton export."""
+    import shutil
+
+    root = tmp_path / name
+    shutil.copytree(world["export"].dir, root / world["export"].dir.name)
+    builder = ExportBuilder.__new__(ExportBuilder)
+    builder.dir = root / world["export"].dir.name
+    return builder
+
+
+def _topup(world, builder, **kwargs):
+    return pipeline.plan_into(world["state"], builder.dir,
+                              pipeline.PlanSettings(exclude_labels=("work@example.org",)), **kwargs)
+
+
+def test_topup_uploads_only_new_messages_and_passes(world, tmp_path):
+    _migrate(world)
+    newer = _newer_export(world, tmp_path)
+    newer.add("n1", labels=("0", "5"))
+    newer.add("n2", labels=("6", "5"))
+    report = _topup(world, newer)
+    assert report.replan.new == 2 and not report.replan.missing_from_export
+    up = pipeline.upload_run(world["state"], world["imap"], say=quiet)
+    assert up.sent == 2
+    pipeline.tag_run(world["state"], world["graph"], say=quiet)
+    r = pipeline.verify_run(world["state"], world["graph"], check_all=True, content=True,
+                            export=pipeline.export_accounting(world["state"], newer.dir))
+    assert r.status.outcome == Outcome.PASSED, (r.mismatches, r.status)
+
+
+def test_topup_with_missing_messages_needs_confirmation_and_writes_nothing(world, tmp_path):
+    _migrate(world)
+    newer = _newer_export(world, tmp_path)
+    (newer.dir / "a1.eml").unlink()
+    (newer.dir / "a1.metadata.json").unlink()
+    before = json.loads(world["state"].get_meta("plan_settings"))["export_dir"]
+    with pytest.raises(pipeline.ConfirmNeeded, match="P2M-CONFIRM-NEEDED: 1 of this state"):
+        _topup(world, newer)
+    assert json.loads(world["state"].get_meta("plan_settings"))["export_dir"] == before
+    assert world["state"].missing_source_ids() == []
+
+
+def test_topup_accept_missing_keeps_the_message_and_passes_by_presence(world, tmp_path):
+    _migrate(world)
+    newer = _newer_export(world, tmp_path)
+    (newer.dir / "a1.eml").unlink()
+    (newer.dir / "a1.metadata.json").unlink()
+    _topup(world, newer, accept_missing=True)
+    st = world["state"]
+    assert st.missing_source_ids() == ["a1"]
+    assert st.stage_counts()["tagged"] == 6           # its stage is kept
+    r = pipeline.verify_run(st, world["graph"], check_all=True, content=True,
+                            export=pipeline.export_accounting(st, newer.dir))
+    assert r.status.outcome == Outcome.PASSED, (r.mismatches, r.status)
+    assert "missing from the newer export" in r.status.sentence
+    assert r.content_checked == 5                     # a1 is checked by presence only
+
+
+def test_topup_message_back_in_a_later_export_is_present_again(world, tmp_path):
+    _migrate(world)
+    newer = _newer_export(world, tmp_path)
+    for suffix in (".eml", ".metadata.json"):
+        (newer.dir / f"a1{suffix}").unlink()
+    _topup(world, newer, accept_missing=True)
+    _topup(world, _newer_export(world, tmp_path, "latest"))   # a1 is back
+    assert world["state"].missing_source_ids() == []
+
+
+def test_topup_never_uploads_a_missing_planned_message(world, tmp_path):
+    newer = _newer_export(world, tmp_path)
+    for suffix in (".eml", ".metadata.json"):
+        (newer.dir / f"a1{suffix}").unlink()
+    _topup(world, newer, accept_missing=True)
+    up = pipeline.upload_run(world["state"], world["imap"], say=quiet)
+    assert up.sent == 5 and world["server"].copies("Archive", "a1") == 0
+    pipeline.tag_run(world["state"], world["graph"], say=quiet)
+    r = pipeline.verify_run(world["state"], world["graph"], check_all=True,
+                            export=pipeline.export_accounting(world["state"], newer.dir))
+    assert r.status.outcome == Outcome.PASSED
+    assert any("never uploaded" in reason for reason in r.status.reasons)
+
+
+def test_topup_of_a_different_mailbox_is_refused(world, tmp_path):
+    other = _newer_export(world, tmp_path, "other")
+    for f in list(other.dir.glob("*.eml")) + list(other.dir.glob("*.metadata.json")):
+        f.unlink()
+    other.add("x1")
+    with pytest.raises(pe.ExportError, match="P2M-EXPORT-CHANGED: .* shares no message"):
+        _topup(world, other)
+
+
+def test_topup_then_old_export_deleted_content_check_uses_the_new_files(world, tmp_path):
+    import shutil
+
+    _migrate(world)
+    newer = _newer_export(world, tmp_path)
+    _topup(world, newer)
+    shutil.rmtree(world["export"].dir)
+    r = pipeline.verify_run(world["state"], world["graph"], check_all=True, content=True,
+                            export=pipeline.export_accounting(world["state"], newer.dir))
+    assert r.status.outcome == Outcome.PASSED, (r.mismatches, r.status)
+
+
+def test_upload_skips_a_file_changed_since_plan(world):
+    (world["export"].dir / "a1.eml").write_bytes(eml_bytes(message_id="<a1@x>", subject="edited later"))
+    up = pipeline.upload_run(world["state"], world["imap"], say=quiet)
+    assert up.source_changed == ["a1"] and world["server"].copies("Archive", "a1") == 0
+    progress = world["state"].progress()
+    assert progress.planned == 1 and progress.source_changed == 1
+    status = migration_status(progress)
+    assert status.next_command is None and "plan" in status.next_hint
+
+
+def test_receipt_marks_messages_missing_from_the_newer_export(world, tmp_path):
+    from proton2m365 import receipt
+
+    newer = _newer_export(world, tmp_path)
+    for suffix in (".eml", ".metadata.json"):
+        (newer.dir / f"a1{suffix}").unlink()
+    _topup(world, newer, accept_missing=True)
+    entry = next(e for e in receipt.entries(world["state"], pipeline.export_accounting(world["state"], newer.dir))
+                 if e["id"] == "a1")
+    assert entry["outcome"] == "missing-from-newer-export-never-uploaded"
+    assert entry["source"] == "missing-from-newer-export"

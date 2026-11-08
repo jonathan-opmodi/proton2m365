@@ -94,3 +94,25 @@ def test_simultaneous_takers_the_earlier_message_wins(world):
     with pytest.raises(LeaseHeld):
         b.acquire()
     assert [pid.split(".")[1] for pid in leases(server)] == ["aaa"]   # a keeps it; b removed its own message
+
+
+def test_a_run_that_slept_past_its_lease_stops_when_another_took_over(world):
+    from proton2m365.lease import LeaseLost
+
+    server, clock = world
+    a = computer(server, clock, "aaa")
+    a.acquire()
+    clock.t += 16 * 60                                 # a's computer slept; its lease expired
+    computer(server, clock, "bbb").acquire()           # b takes over
+    with pytest.raises(LeaseLost, match="P2M-LEASE-LOST"):
+        a.renew()                                      # a wakes up: it must not keep writing
+    assert [pid.split(".")[1] for pid in leases(server)] == ["bbb"]
+
+
+def test_a_run_that_slept_with_nobody_else_carries_on(world):
+    server, clock = world
+    a = computer(server, clock, "aaa")
+    a.acquire()
+    clock.t += 16 * 60
+    a.renew()                                          # expired, but nobody took over: renewed
+    assert [pid.split(".")[1] for pid in leases(server)] == ["aaa"]

@@ -249,3 +249,47 @@ def test_ensure_categories_creates_only_missing(graph, fake):
     assert {c["displayName"]: c["color"] for c in fake.created_categories} == {
         "receipts": "preset12", "Starred": "preset3", "Travel": "preset5"}
     assert graph.ensure_categories({"Travel": None}) == []     # second run creates nothing
+
+
+def test_a_post_is_not_repeated_after_503(graph, fake):
+    calls = []
+
+    def handler(request):
+        calls.append(request.method)
+        return httpx.Response(503, json={"error": {"code": "ServiceUnavailable", "message": "busy"}})
+
+    graph.http = httpx.Client(base_url=gs.GRAPH, transport=httpx.MockTransport(handler))
+    with pytest.raises(gs.GraphError) as exc:
+        graph.request("POST", "/me/outlook/masterCategories", json={"displayName": "X"})
+    assert exc.value.status == 503 and calls == ["POST"]
+
+
+def test_a_category_created_before_a_lost_reply_is_not_created_twice(graph, fake, slept):
+    real = fake.handler
+    lost = {"n": 1}
+
+    def handler(request):
+        response = real(request)
+        if request.method == "POST" and lost["n"]:
+            lost["n"] -= 1
+            return httpx.Response(504, json={"error": {"code": "GatewayTimeout", "message": "lost"}})
+        return response
+
+    graph.http = httpx.Client(base_url=gs.GRAPH, transport=httpx.MockTransport(handler))
+    assert graph.ensure_categories({"Travel": None}) == ["Travel"]
+    assert [c["displayName"] for c in fake.created_categories] == ["Travel"]   # created once, reply lost
+
+
+def test_a_category_create_that_did_not_happen_is_retried(graph, fake, slept):
+    real = fake.handler
+    failed = {"n": 1}
+
+    def handler(request):
+        if request.method == "POST" and failed["n"]:
+            failed["n"] -= 1
+            return httpx.Response(503, json={"error": {"code": "ServiceUnavailable", "message": "busy"}})
+        return real(request)
+
+    graph.http = httpx.Client(base_url=gs.GRAPH, transport=httpx.MockTransport(handler))
+    assert graph.ensure_categories({"Travel": None}) == ["Travel"]
+    assert [c["displayName"] for c in fake.created_categories] == ["Travel"]
