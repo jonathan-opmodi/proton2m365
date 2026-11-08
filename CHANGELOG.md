@@ -2,7 +2,7 @@
 
 All notable changes to proton2m365. Versions follow the git tags (`vX.Y.Z`).
 
-## v0.4.0 (unreleased)
+## v0.4.0 (2026-11-07)
 
 - `proton2m365 contacts-csv` converts Proton's contacts export (`.vcf`, vCard 2.1, 3.0 or 4.0) into the CSV
   that Outlook imports, offline. Values with no Outlook column (a 4th email, photos, custom fields, a birthday
