@@ -57,6 +57,7 @@ APP_NAME = "proton2m365"
 TAG = "proton2m365"
 NONCE_TAG = "proton2m365-nonce:"
 SP_WAIT_SECONDS = 120
+GRANT_WAIT_SECONDS = 60  # consent given at sign-in can take a while to show up in oauth2PermissionGrants
 DEFAULT_TENANT = "organizations"
 BLOCKED_SIGN_IN = ("AADSTS65001", "AADSTS90094", "AADSTS90095", "AADSTS50105", "AADSTS53003", "AADSTS7000112",
                    "AADSTS65004")
@@ -344,9 +345,20 @@ class Setup:
 
     def settle_cli_grant(self, me: str | None) -> str:
         """Revoke the Graph CLI grant when it holds nothing but setup's own permissions: setup made it, and the
-        tenant is left as it was. A grant with other permissions existed before (Graph PowerShell use): kept."""
+        tenant is left as it was. A grant with other permissions existed before (Graph PowerShell use): kept.
+
+        Signing in succeeded, so a grant exists; consent given seconds ago can take a while to be listed, so wait
+        for it (at most GRANT_WAIT_SECONDS) rather than conclude there is none. "unconfirmed" if it never shows."""
+        deadline, delay = self.clock() + GRANT_WAIT_SECONDS, 2.0
+        grants = self.cli_grants(me)
+        while not grants and self.clock() < deadline:
+            self.sleep(delay)
+            delay = min(delay * 2, 15)
+            grants = self.cli_grants(me)
+        if not grants:
+            return "unconfirmed"
         outcome = "none"
-        for grant in self.cli_grants(me):
+        for grant in grants:
             scopes = set((grant.get("scope") or "").split())
             if scopes <= set(SETUP_SCOPE_NAMES) | SIGN_IN_SCOPES:
                 self.graph.request("DELETE", f"/oauth2PermissionGrants/{grant['id']}")

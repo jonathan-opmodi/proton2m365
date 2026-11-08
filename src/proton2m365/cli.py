@@ -886,7 +886,11 @@ def cmd_setup(args: argparse.Namespace) -> int:
         print(f"Wrote client_id and tenant to {config_path}.")
     cli_note = {"revoked": "Microsoft Graph Command Line Tools' consent from this sign-in was removed again.",
                 "kept": "Microsoft Graph Command Line Tools already had other consent in this tenant (for example "
-                        "from Graph PowerShell); it was left as it was."}.get(result.cli_grant)
+                        "from Graph PowerShell); it was left as it was.",
+                "unconfirmed": "Could not confirm the consent Microsoft Graph Command Line Tools got from this sign-in "
+                               "(Microsoft had not listed it yet). If you do not use that tool, remove it in the "
+                               "Entra admin center: Enterprise applications, Microsoft Graph Command Line Tools, "
+                               "Permissions."}.get(result.cli_grant)
     if cli_note:
         print(cli_note)
     _result(client_id=result.client_id, tenant=result.tenant, adopted=result.adopted, created=result.created,

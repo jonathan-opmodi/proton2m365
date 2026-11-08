@@ -347,3 +347,26 @@ def test_cli_use_app_records_the_app(capsys):
     cfg = tomllib.loads(auth_mod.DEFAULT_CONFIG.read_text())
     assert cfg["client_id"] == "12345678-1234-1234-1234-123456789012" and cfg["tenant"] == "contoso.com"
     assert cli.main(["setup", "--use-app", "nonsense", "--tenant", "contoso.com"]) == 2
+
+
+def test_consent_listed_late_is_still_found_and_revoked(tenant, config, tmp_path):
+    late = tenant.grants.pop("g-cli")
+    calls = {"n": 0}
+    real = tenant.handler
+
+    def handler(request):
+        if request.url.path.endswith("/oauth2PermissionGrants") and request.method == "GET" \
+                and "sp-cli" in request.url.query.decode():
+            calls["n"] += 1
+            if calls["n"] == 3:
+                tenant.grants["g-cli"] = late      # Microsoft lists it on the third look
+        return real(request)
+    tenant.handler = handler
+    r = make(tenant, config, tmp_path).run("tid-1", ME)
+    assert r.cli_grant == "revoked" and "g-cli" not in tenant.grants
+
+
+def test_consent_never_listed_is_reported_unconfirmed(tenant, config, tmp_path):
+    del tenant.grants["g-cli"]
+    r = make(tenant, config, tmp_path).run("tid-1", ME)
+    assert r.cli_grant == "unconfirmed"
