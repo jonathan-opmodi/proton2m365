@@ -2,7 +2,7 @@
 
 All notable changes to proton2m365. Versions follow the git tags (`vX.Y.Z`).
 
-## Unreleased (v0.3.0)
+## v0.3.0 (2026-11-07)
 
 - `proton2m365 setup` registers the sign-in app in a work or school tenant in one administrator sign-in (through
   Microsoft Graph Command Line Tools, kept in memory only), grants admin consent and writes config.toml. Running it
