@@ -1006,6 +1006,55 @@ def cmd_sample_export(args: argparse.Namespace) -> int:
     return st.EXIT_OK
 
 
+def cmd_contacts_csv(args: argparse.Namespace) -> int:
+    from . import contacts_csv as cc
+
+    source = Path(args.vcf)
+    out = Path(args.output) if args.output else source.with_suffix(".csv")
+    losses = out.with_name(out.stem + ".losses.txt")
+    if out.resolve() == source.resolve():
+        print("contacts-csv: the output would replace the .vcf; choose another name with -o", file=sys.stderr)
+        return st.EXIT_USAGE
+    try:
+        existing = [p for p in (out, losses) if p.exists()]
+        if existing and not args.force:
+            names = " and ".join(str(p) for p in existing)
+            raise cc.VCardError(f"P2M-CONTACTS-EXISTS: {names} already exists; add --force to replace it")
+        conversion = cc.convert(cc.load(source))
+        keep_losses = bool(conversion.with_losses or conversion.skipped)
+        try:
+            cc.write(conversion, out, losses if keep_losses else None, source.name)
+        except OSError as exc:
+            raise cc.VCardError(f"P2M-CONTACTS-WRITE: cannot write {out}: {exc.strerror or exc}") from exc
+    except cc.VCardError as exc:
+        print(f"contacts-csv: {exc}", file=sys.stderr)
+        _json_error(args, exc)
+        return st.EXIT_USAGE
+    if not keep_losses:
+        losses.unlink(missing_ok=True)  # an old report from an earlier run would describe other data
+    n_lost = sum(len(c.losses) for c in conversion.with_losses)
+    def n(count: int, word: str, plural: str = "") -> str:
+        return f"{count} {word}" if count == 1 else f"{count} {plural or word + 's'}"
+
+    print(f"Wrote {n(len(conversion.contacts), 'contact')} to {out}")
+    if keep_losses:
+        parts = []
+        if n_lost:
+            parts.append(f"{n(n_lost, 'value')} in {n(len(conversion.with_losses), 'contact')} "
+                         "found no Outlook column")
+        if conversion.skipped:
+            parts.append(f"{n(len(conversion.skipped), 'entry', 'entries')} not converted")
+        print("; ".join(parts) + f". See {losses} (only you can read it).")
+    else:
+        print("Every value found a column; nothing was left out.")
+    print("Import it once: Outlook on the web > People > Manage contacts > Import contacts. "
+          "Importing the same file twice creates duplicates.")
+    _result(contacts=len(conversion.contacts), contacts_with_losses=len(conversion.with_losses),
+            values_lost=n_lost, skipped=len(conversion.skipped), csv=str(out),
+            losses_report=str(losses) if keep_losses else None)
+    return st.EXIT_OK
+
+
 def _q(s: str) -> str:
     import shlex
 
@@ -1396,6 +1445,13 @@ def build_parser() -> argparse.ArgumentParser:
     sample.add_argument("dir", help="an empty or new folder")
     sample.add_argument("--with-orphan", action="store_true", help="add one .eml without metadata")
     sample.set_defaults(func=cmd_sample_export)
+
+    cc = sub.add_parser("contacts-csv", parents=[as_json],
+                        help="turn Proton's contacts export (.vcf) into the CSV Outlook imports (offline)")
+    cc.add_argument("vcf", help="the .vcf file Proton Contacts exported")
+    cc.add_argument("-o", "--output", metavar="CSV", help="where to write the CSV (default: next to the .vcf)")
+    cc.add_argument("--force", action="store_true", help="replace an existing CSV and loss report")
+    cc.set_defaults(func=cmd_contacts_csv)
 
     doc = sub.add_parser("doctor", parents=[stateful, as_json],
                          help="what an issue report needs; names and addresses are redacted")

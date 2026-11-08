@@ -10,7 +10,7 @@ Bridge or a paid Proton plan, and get a receipt that accounts for every message.
 - Ends with `verify`: one outcome (PASSED, SAMPLE OK, INCOMPLETE or FAILED) and a receipt file listing every
   export file as migrated, intentionally skipped (and why), or unresolved.
 
-Status: v0.1. Microsoft 365 work and school accounts are tested live. **Outlook.com and Microsoft 365
+Status: Microsoft 365 work and school accounts are tested live. **Outlook.com and Microsoft 365
 Personal/Family are experimental** until the live checks in [docs/how-it-works.md](docs/how-it-works.md#outlookcom)
 have passed. Support is best effort through GitHub issues. Want contacts and calendar, Gmail, or simpler
 personal-account support? [Open a "Want" issue](https://github.com/jonathan-opmodi/proton2m365/issues/new/choose)
@@ -133,6 +133,12 @@ was used too), `proton2m365 dedupe --dry-run` lists them and `proton2m365 dedupe
 Deleted Items, keeping one of each. It asks first (`--yes` skips the question; without a terminal it is
 required) and `--folder "Archive"` limits it to one folder. Then run `tag` and `verify` again.
 
+## Calendar and contacts
+
+They go through Outlook's own import. Calendars upload as they are (`.ics`); contacts need converting first,
+which `proton2m365 contacts-csv contacts.vcf` does offline, listing anything Outlook's contact CSV has no place
+for. [docs/calendar-and-contacts.md](docs/calendar-and-contacts.md) has the steps and what each import leaves out.
+
 ## If it stops
 
 Run the same command again: nothing that already arrived is sent twice. `proton2m365 status` shows where
@@ -163,6 +169,7 @@ Tools built on Proton Mail Bridge (imapsync and others) need a paid Proton plan 
 ## More
 
 - [How it works](docs/how-it-works.md): export format, folder routing, why IMAP plus Graph
+- [Calendar and contacts](docs/calendar-and-contacts.md): Outlook's import, and what it leaves out
 - [Errors](docs/errors.md): every `P2M-` code and what to do
 - [Upgrading](docs/upgrading.md): pinning a version, resuming across versions
 - [Using your own Entra app](docs/setup-own-app.md)
